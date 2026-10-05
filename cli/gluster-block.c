@@ -17,7 +17,7 @@
 
 # define  GB_CREATE_HELP_STR  "gluster-block create <volname/blockname> "      \
                                 "[ha <count>] [auth <enable|disable>] "        \
-                                "[prealloc <full|no>] [storage <filename>] "   \
+                                "[prealloc <full|no>] [zerofill <yes|no>] [storage <filename>] "   \
                                 "[ring-buffer <size-in-MB-units>] "            \
                                 "[block-size <size-in-Byte-units>] "           \
                                 "[io-timeout <N-in-Second>] "                  \
@@ -643,6 +643,7 @@ glusterBlockCreate(int argcount, char **options, int json)
   cobj.json_resp = json;
   cobj.mpath = 1;
   cobj.prealloc = 1;
+  cobj.zerofill = 0;  /* default to false (no zero-fill) */
 
   if (glusterBlockParseVolumeBlock(options[optind++], cobj.volume, cobj.block_name,
                                     sizeof(cobj.volume), sizeof(cobj.block_name),
@@ -693,6 +694,19 @@ glusterBlockCreate(int argcount, char **options, int json)
         MSG(stderr, GB_CREATE_HELP_STR);
         LOG("cli", GB_LOG_ERROR, "Create failed while parsing argument "
                                  "to prealloc  for <%s/%s>",
+                                 cobj.volume, cobj.block_name);
+        goto out;
+      }
+      break;
+    case GB_CLI_CREATE_ZEROFILL:
+      ret = convertStringToTrillianParse(options[optind++]);
+      if(ret >= 0) {
+        cobj.zerofill = ret;
+      } else {
+        MSG(stderr, "'zerofill' option is incorrect");
+        MSG(stderr, GB_CREATE_HELP_STR);
+        LOG("cli", GB_LOG_ERROR, "Create failed while parsing argument "
+                                 "to zerofill for <%s/%s>",
                                  cobj.volume, cobj.block_name);
         goto out;
       }

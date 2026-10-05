@@ -497,10 +497,11 @@ typedef enum gbCliCreateOptions {
   GB_CLI_CREATE_HA         = 1,
   GB_CLI_CREATE_AUTH       = 2,
   GB_CLI_CREATE_PREALLOC   = 3,
-  GB_CLI_CREATE_STORAGE    = 4,
-  GB_CLI_CREATE_RBSIZE     = 5,
-  GB_CLI_CREATE_BLKSIZE    = 6,
-  GB_CLI_CREATE_IO_TIMEOUT = 7,
+  GB_CLI_CREATE_ZEROFILL   = 4,
+  GB_CLI_CREATE_STORAGE    = 5,
+  GB_CLI_CREATE_RBSIZE     = 6,
+  GB_CLI_CREATE_BLKSIZE    = 7,
+  GB_CLI_CREATE_IO_TIMEOUT = 8,
 
   GB_CLI_CREATE_OPT_MAX
 } gbCliCreateOptions;
@@ -510,6 +511,7 @@ static const char *const gbCliCreateOptLookup[] = {
   [GB_CLI_CREATE_HA]         = "ha",
   [GB_CLI_CREATE_AUTH]       = "auth",
   [GB_CLI_CREATE_PREALLOC]   = "prealloc",
+  [GB_CLI_CREATE_ZEROFILL]   = "zerofill",
   [GB_CLI_CREATE_STORAGE]    = "storage",
   [GB_CLI_CREATE_RBSIZE]     = "ring-buffer",
   [GB_CLI_CREATE_BLKSIZE]    = "block-size",
@@ -588,6 +590,8 @@ typedef enum Metakey {
   GB_META_PRIOPATH    = 8,
   GB_META_BLKSIZE     = 9,
   GB_META_IO_TIMEOUT  = 10,
+  GB_META_PREALLOC    = 11,
+  GB_META_ZEROFILL    = 12,
 
   GB_METAKEY_MAX
 } Metakey;
@@ -604,6 +608,8 @@ static const char *const MetakeyLookup[] = {
   [GB_META_PRIOPATH]    = "PRIOPATH",
   [GB_META_BLKSIZE]     = "BLKSIZE",
   [GB_META_IO_TIMEOUT]  = "IOTIMEOUT",
+  [GB_META_PREALLOC]    = "PREALLOC",
+  [GB_META_ZEROFILL]    = "ZEROFILL",
 
   [GB_METAKEY_MAX]      = NULL
 };

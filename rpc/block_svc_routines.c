@@ -261,6 +261,7 @@ convertTypeCreate2ToCreate(blockCreate2 *blk_v2, blockCreate *blk_v1)
   blk_v1->block_hosts = blk_v2->block_hosts;
   blk_v1->size = blk_v2->size;
   blk_v1->auth_mode = blk_v2->auth_mode;
+  blk_v1->prealloc = blk_v2->prealloc;
 
   return;
 }

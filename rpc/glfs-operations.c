@@ -293,24 +293,26 @@ glusterBlockCreateEntry(struct glfs *glfs, blockCreateCli *blk, char *gbid,
     }
 
     if (blk->prealloc) {
-      ret = glfs_zerofill(tgfd, 0, blk->size);
-      if (ret && errno == ENOTSUP) {
-        if (glusterBlockZeroFill(tgfd, 0, blk->size)) {
+      if (blk->zerofill) {
+        ret = glfs_zerofill(tgfd, 0, blk->size);
+        if (ret && errno == ENOTSUP) {
+          if (glusterBlockZeroFill(tgfd, 0, blk->size)) {
+            *errCode = errno;
+            LOG("gfapi", GB_LOG_ERROR, "glusterBlockZeroFill(%s) on "
+                "volume: %s block: %s of size %zu failed [%s]",
+                gbid, blk->volume, blk->block_name, blk->size, strerror(errno));
+            ret = -1;
+            goto unlink;
+          }
+          ret = 0;
+        } else if (ret) {
           *errCode = errno;
-          LOG("gfapi", GB_LOG_ERROR, "glusterBlockZeroFill(%s) on "
-              "volume: %s block: %s of size %zu failed [%s]",
+          LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s): on "
+              "volume %s for block %s of size %zu failed [%s]",
               gbid, blk->volume, blk->block_name, blk->size, strerror(errno));
           ret = -1;
           goto unlink;
         }
-        ret = 0;
-      } else if (ret) {
-        *errCode = errno;
-        LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s): on "
-            "volume %s for block %s of size %zu failed [%s]",
-            gbid, blk->volume, blk->block_name, blk->size, strerror(errno));
-        ret = -1;
-        goto unlink;
       }
     }
   }
@@ -353,6 +355,71 @@ unlink:
 }
 
 
+static int
+glusterBlockZeroFillRange(struct glfs_fd *fd, struct blockModifySize *blk,
+                          off_t off, size_t len, int *errCode)
+{
+  int ret = glfs_zerofill(fd, off, len);
+
+  if (ret && errno == ENOTSUP) {
+    ret = glusterBlockZeroFill(fd, off, len);
+    if (ret) {
+      *errCode = errno;
+      LOG("gfapi", GB_LOG_ERROR, "glusterBlockZeroFill(%s) on "
+          "volume %s for block %s of size %zu failed [%s]",
+          blk->gbid, blk->volume, blk->block_name, blk->size,
+          strerror(*errCode));
+      return -1;
+    }
+    return 0;
+  }
+
+  if (ret) {
+    *errCode = errno;
+    LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s): on "
+        "volume %s for block %s of size %zu failed [%s]",
+        blk->gbid, blk->volume, blk->block_name, blk->size,
+        strerror(*errCode));
+    return -1;
+  }
+
+  return 0;
+}
+
+/* Нужно ли заполнять нулями расширенную область */
+static bool
+glusterBlockNeedZeroFill(struct glfs *glfs, blockModifySize *blk,
+                         const struct stat *sb)
+{
+  MetaInfo *info = NULL;
+  int infoErrCode = 0;
+  bool need;
+
+  /* Старая эвристика: файл был разреженным (не prealloc) */
+  need = (sb->st_size <= 512 * sb->st_blocks);
+
+  if (GB_ALLOC(info) < 0) {
+    LOG("gfapi", GB_LOG_WARNING,
+        "Failed to allocate info for resize, using fallback");
+    return need;
+  }
+
+  if (blockGetMetaInfo(glfs, blk->block_name, info, &infoErrCode)) {
+    LOG("gfapi", GB_LOG_WARNING, "Could not read metadata for %s: %s",
+        blk->block_name, strerror(infoErrCode));
+  } else {
+    need = info->prealloc && info->zerofill;
+    if (!need) {
+      LOG("gfapi", GB_LOG_DEBUG,
+          "Skipping zero-fill for %s: prealloc=%d, zerofill=%d",
+          blk->block_name, info->prealloc, info->zerofill);
+    }
+  }
+
+  blockFreeMetaInfo(info);
+  return need;
+}
+
 int
 glusterBlockResizeEntry(struct glfs *glfs, blockModifySize *blk,
                         int *errCode, char **errMsg)
@@ -360,102 +427,84 @@ glusterBlockResizeEntry(struct glfs *glfs, blockModifySize *blk,
   char fpath[PATH_MAX] = {0};
   struct glfs_fd *tgfd;
   struct stat sb = {0, };
-  int ret;
+  int ret = -1;
 
   snprintf(fpath, sizeof fpath, "%s/%s", GB_STOREDIR, blk->gbid);
+
   tgfd = glfs_open(glfs, fpath, O_WRONLY | O_SYNC);
   if (!tgfd) {
     *errCode = errno;
-    LOG("gfapi", GB_LOG_ERROR, "glfs_open(%s) failed[%s]", blk->gbid,
-        strerror(errno));
-    ret = -1;
+    LOG("gfapi", GB_LOG_ERROR, "glfs_open(%s) failed[%s]",
+        blk->gbid, strerror(*errCode));
     goto out;
-  } else {
-    ret = glfs_stat (glfs, fpath, &sb);
-    if (ret == -1) {
-      *errCode = errno;
-      LOG("gfapi", GB_LOG_ERROR,
-          "glfs_stat(%s): on volume %s for block %s "
-          "of size %zu failed[%s]", blk->gbid, blk->volume, blk->block_name,
-          blk->size, strerror(errno));
-      ret = -1;
-      goto close;
-    }
+  }
 
-    /* skip changing file size */
-    if (blk->size == sb.st_size) {
-      ret = 0;
-      goto close;
-    }
+  if (glfs_stat(glfs, fpath, &sb) == -1) {
+    *errCode = errno;
+    LOG("gfapi", GB_LOG_ERROR,
+        "glfs_stat(%s): on volume %s for block %s of size %zu failed[%s]",
+        blk->gbid, blk->volume, blk->block_name, blk->size,
+        strerror(*errCode));
+    goto close;
+  }
 
-    if (glusterBlockCheckAvailableSpace(glfs, blk->volume, blk->size - sb.st_size, errMsg)) {
-      *errCode = errno;
-      ret = -1;
-      goto close;
-    }
+  /* размер не меняется */
+  if ((off_t)blk->size == sb.st_size) {
+    ret = 0;
+    goto close;
+  }
+
+  if (glusterBlockCheckAvailableSpace(glfs, blk->volume,
+                                      blk->size - sb.st_size, errMsg)) {
+    *errCode = errno ? errno : ENOSPC;
+    goto close;
+  }
 
 #if GFAPI_VERSION760
-    ret = glfs_ftruncate(tgfd, blk->size, NULL, NULL);
+  ret = glfs_ftruncate(tgfd, blk->size, NULL, NULL);
 #else
-    ret = glfs_ftruncate(tgfd, blk->size);
+  ret = glfs_ftruncate(tgfd, blk->size);
 #endif
-    if (ret) {
-      *errCode = errno;
-      LOG("gfapi", GB_LOG_ERROR,
-          "glfs_ftruncate(%s): on volume %s for block %s "
-          "of size %zu failed[%s]", blk->gbid, blk->volume, blk->block_name,
-          blk->size, strerror(errno));
-      goto close;
-    }
+  if (ret) {
+    *errCode = errno;
+    LOG("gfapi", GB_LOG_ERROR,
+        "glfs_ftruncate(%s): on volume %s for block %s of size %zu failed[%s]",
+        blk->gbid, blk->volume, blk->block_name, blk->size,
+        strerror(*errCode));
+    ret = -1;
+    goto close;
+  }
 
-    /* dirty hack to check if the file is zerofilled ? */
-    if ((blk->size > sb.st_size) && (sb.st_size <= 512 * sb.st_blocks)) {
-      ret = glfs_zerofill(tgfd, sb.st_size, blk->size - sb.st_size);
-      if (ret && errno == ENOTSUP) {
-        if (glusterBlockZeroFill(tgfd, sb.st_size, blk->size - sb.st_size)) {
-          *errCode = errno;
-          LOG("gfapi", GB_LOG_ERROR, "glusterBlockZeroFill(%s) on "
-              "volume %s for block %s of size %zu failed [%s]",
-              blk->gbid, blk->volume, blk->block_name, blk->size, strerror(errno));
-          ret = -1;
-          goto close;
-        }
-        ret = 0;
-      } else if (ret) {
-        *errCode = errno;
-        LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s): on "
-            "volume %s for block %s of size %zu failed [%s]",
-            blk->gbid, blk->volume, blk->block_name, blk->size, strerror(errno));
-        ret = -1;
-        goto close;
-      }
+  if ((off_t)blk->size > sb.st_size && glusterBlockNeedZeroFill(glfs, blk, &sb)) {
+    ret = glusterBlockZeroFillRange(tgfd, blk, sb.st_size,
+                                    blk->size - sb.st_size, errCode);
+    if (ret) {
+      goto close;
     }
   }
 
- close:
-  if (tgfd && glfs_close(tgfd) != 0) {
-    if (!(*errCode)) {
-      *errCode = errno;
+  ret = 0;
+
+close:
+  if (glfs_close(tgfd) != 0) {
+    int saved = errno;
+    if (!*errCode) {
+      *errCode = saved;
     }
     LOG("gfapi", GB_LOG_ERROR,
         "glfs_close(%s): on volume %s for block %s failed[%s]",
-        blk->gbid, blk->volume, blk->block_name, strerror(errno));
+        blk->gbid, blk->volume, blk->block_name, strerror(saved));
     ret = -1;
   }
 
-
- out:
-  if (ret) {
-    if (errMsg && !(*errMsg)) {
-      GB_ASPRINTF (errMsg, "Not able to resize storage for %s/%s [%s]",
-                   blk->volume, blk->block_name, strerror(*errCode));
-    }
-
+out:
+  if (ret && errMsg && !*errMsg) {
+    GB_ASPRINTF(errMsg, "Not able to resize storage for %s/%s [%s]",
+                blk->volume, blk->block_name, strerror(*errCode));
   }
 
   return ret;
 }
-
 
 int
 glusterBlockDeleteEntry(struct glfs *glfs, char *volume, char *gbid)
@@ -642,6 +691,12 @@ blockStuffMetaInfo(MetaInfo *info, char *line)
     break;
   case GB_META_PRIOPATH:
     GB_STRCPYSTATIC(info->prio_path, strchr(line, ' ') + 1);
+    break;
+  case GB_META_PREALLOC:
+    sscanf(strchr(line, ' '), "%d", &info->prealloc);
+    break;
+  case GB_META_ZEROFILL:
+    sscanf(strchr(line, ' '), "%d", &info->zerofill);
     break;
 
   default:

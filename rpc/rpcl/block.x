@@ -23,6 +23,7 @@ struct blockCreate {
   char      block_name[255];
   string    block_hosts<>;               /* for multiple tpg's creation */
   bool      auth_mode;
+  bool      prealloc;
 };
 
 struct blockCreate2 {
@@ -37,6 +38,8 @@ struct blockCreate2 {
   bool      auth_mode;
   u_int     rb_size;                     /* TCMU Ring Buffer size in kernel */
   opaque    xdata<>;                     /* future reserve */
+  bool      prealloc;
+  bool      zerofill;
 };
 
 struct blockModify {
@@ -71,6 +74,7 @@ struct blockCreateCli {
   u_int     mpath;                /* HA request count */
   bool      auth_mode;
   bool      prealloc;
+  bool      zerofill;
   char      storage[255];
   char      block_name[255];
   string    block_hosts<>;

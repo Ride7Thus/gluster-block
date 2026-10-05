@@ -81,6 +81,7 @@ commands:
   create  <volname/blockname> [ha <count>]
                               [auth <enable|disable>]
                               [prealloc <full|no>]
+                              [zerofill <yes|no>]
                               [storage <filename>]
                               [ring-buffer <size-in-MB-units>]
                               [block-size <size-in-Byte-units>]

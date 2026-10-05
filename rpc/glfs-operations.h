@@ -42,7 +42,9 @@ typedef struct MetaInfo {
   size_t mpath;
   char   entry[16];  /* possible strings for ENTRYCREATE: INPROGRESS|SUCCESS|FAIL */
   char   passwd[38];
-
+  bool_t prealloc;
+  bool_t zerofill;
+  
   size_t nhosts;
   NodeInfo **list;
 } MetaInfo;
