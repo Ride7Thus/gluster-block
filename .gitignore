@@ -14,6 +14,7 @@ missing
 compile
 libtool
 m4/
+*.bak
 *.libs
 *.o
 *.lo

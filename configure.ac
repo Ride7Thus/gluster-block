@@ -125,6 +125,7 @@ AC_CHECK_LIB([uuid], [uuid_generate], [UUID="-luuid"],
 AC_SUBST(UUID)
 AC_CHECK_LIB([pthread], [pthread_mutex_init],[PTHREAD="-lpthread"],
              AC_MSG_ERROR([Posix threads library is required to build gluster-block]))
+AC_CHECK_LIB([gfapi], [glfs_fallocate], [], [AC_MSG_ERROR([glfs_fallocate not found])])
 AC_SUBST(PTHREAD)
 
 # Dirty hacky stuff to make STATEDIR work
