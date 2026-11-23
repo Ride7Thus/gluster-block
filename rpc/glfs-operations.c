@@ -305,7 +305,7 @@ rollback:
 }
 
 
-/* Режим расширения для resize: из метаданных, иначе по st_blocks */
+/* Allocation mode for resize: from block metadata, else guess by st_blocks */
 static void
 glusterBlockGetAllocMode(struct glfs *glfs, blockModifySize *blk,
                          const struct stat *sb, bool *prealloc,
@@ -314,9 +314,10 @@ glusterBlockGetAllocMode(struct glfs *glfs, blockModifySize *blk,
   MetaInfo *info = NULL;
   int infoErrCode = 0;
 
-  /* fallback: файл полностью аллоцирован => был prealloc */
+  /* fallback for blocks created before PREALLOC was recorded:
+   * a fully allocated file was created with prealloc full */
   *prealloc = (sb->st_size <= 512 * sb->st_blocks);
-  *zerofill = *prealloc;
+  *zerofill = false;
 
   if (GB_ALLOC(info) < 0) {
     LOG("gfapi", GB_LOG_WARNING,
@@ -327,9 +328,12 @@ glusterBlockGetAllocMode(struct glfs *glfs, blockModifySize *blk,
   if (blockGetMetaInfo(glfs, blk->block_name, info, &infoErrCode)) {
     LOG("gfapi", GB_LOG_WARNING, "Could not read metadata for %s: %s",
         blk->block_name, strerror(infoErrCode));
-  } else {
+  } else if (info->alloc_known) {
     *prealloc = info->prealloc;
     *zerofill = info->zerofill;
+  } else {
+    LOG("gfapi", GB_LOG_INFO, "No PREALLOC in metadata of %s, guessed "
+        "prealloc=%d from file allocation", blk->block_name, *prealloc);
   }
 
   blockFreeMetaInfo(info);
@@ -740,6 +744,7 @@ blockStuffMetaInfo(MetaInfo *info, char *line)
     break;
   case GB_META_PREALLOC:
     sscanf(strchr(line, ' '), "%d", &info->prealloc);
+    info->alloc_known = true;
     break;
   case GB_META_ZEROFILL:
     sscanf(strchr(line, ' '), "%d", &info->zerofill);
@@ -835,6 +840,8 @@ blockParseValidServers(struct glfs* glfs, char *metafile,
     case GB_META_HA:
     case GB_META_ENTRYCREATE:
     case GB_META_PASSWD:
+    case GB_META_PREALLOC:
+    case GB_META_ZEROFILL:
       break;
     default:
       if (skiphost && !strcmp(h, skiphost)) {

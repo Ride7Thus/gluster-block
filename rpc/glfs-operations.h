@@ -44,7 +44,8 @@ typedef struct MetaInfo {
   char   passwd[38];
   bool_t prealloc;
   bool_t zerofill;
-  
+  bool   alloc_known;   /* PREALLOC was recorded in metadata */
+
   size_t nhosts;
   NodeInfo **list;
 } MetaInfo;

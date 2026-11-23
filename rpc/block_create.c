@@ -1066,6 +1066,15 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
     goto exist;
   }
 
+  /* record how the backing file was allocated, resize follows the same
+   * mode; unknown for a linked existing storage file */
+  if (!strlen(blk->storage)) {
+    GB_METAUPDATE_OR_GOTO(lock, glfs, blk->block_name, blk->volume,
+                          errCode, errMsg, exist,
+                          "PREALLOC: %d\nZEROFILL: %d\n",
+                          !!blk->prealloc, !!(blk->prealloc && blk->zerofill));
+  }
+
   if (!resultCaps[GB_CREATE_IO_TIMEOUT_CAP]) {
     GB_METAUPDATE_OR_GOTO(lock, glfs, blk->block_name, blk->volume,
                           errCode, errMsg, exist,
