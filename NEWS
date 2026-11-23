@@ -1,3 +1,46 @@
+gluster-block release 0.5.18
+============================
+
+The patch number counts the problems solved since 0.5.1 (17).
+
+Behaviour changes:
+------------------
+* create and modify size return 'RESULT: IN-PROGRESS' with an
+  OPERATION-ID and finish in background. Use 'gluster-block status' to
+  track them, or '--wait' (GB_CLI_WAIT=yes) to wait for the result as
+  before. Scripts that need the final result must use --wait.
+* Other modifying commands fail at once with EBUSY while such an
+  operation runs on the volume; list, info, status and genconfig keep
+  working.
+* create with 'prealloc no' on a dispersed volume asks for
+  confirmation, use '--yes' in scripts. Without a terminal it fails
+  with exit code 228.
+
+Features:
+---------
+1. zerofill <yes|no> option for create
+2. fallocate for create and resize, ftruncate + zerofill fallback
+3. create and resize run in background, new 'status' command, --wait
+4. operation results are shared between nodes through /block-ops
+5. confirmation for thin blocks on dispersed volumes, --yes
+6. builds for CentOS Stream 9, Rocky Linux and AlmaLinux 8/9
+7. GitLab CI with per distribution RPM artifacts
+
+Fixes:
+------
+8. subsequent delete failures
+9. data races from non reentrant strtok() in the daemon threads
+10. daemon options without an argument swallowed the next option
+11. daemon crash on exit (config released before the last log)
+12. create reported success when the HA count was not configured
+13. inter-node RPC wire format broken by the prealloc/zerofill fields
+14. 'prealloc full' left a sparse file without fallocate support,
+    zerofill skipped after a successful fallocate
+15. resize did not follow the allocation mode of the block
+16. zerofill accepted without prealloc or with storage
+17. timeout option value read from a fixed argument position
+
+
 gluster-block release 0.5.1 is tagged.
 
 This is a security and bugfix release.
