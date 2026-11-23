@@ -239,47 +239,63 @@ glusterBlockRollback(struct glfs_fd *fd, off_t off, const char *gbid,
   errno = saved;
 }
 
+/*
+ * Grow the file from @off by @len bytes.
+ *
+ *  prealloc no                : ftruncate only, the file stays sparse.
+ *  prealloc full, zerofill no : glfs_fallocate() reserves the whole range in
+ *                               one call. If the volume does not support it,
+ *                               fall back to ftruncate + zerofill: a plain
+ *                               ftruncate would silently leave a sparse file,
+ *                               which tcmu-runner rejects on dispersed volumes.
+ *  prealloc full, zerofill yes: glfs_fallocate() (fails fast with ENOSPC) and
+ *                               then write zeros over the range, for bricks
+ *                               where fallocate only reserves space (thin LVM,
+ *                               VDO, ...).
+ */
 static int
 glusterBlockExtend(struct glfs_fd *fd, off_t off, size_t len,
                    bool prealloc, bool zerofill, const char *gbid,
                    const char *volume, const char *name, int *errCode)
 {
-  int ret;
+  bool needZero = prealloc && zerofill;
+
 
   if (!len) {
     return 0;
   }
 
-  if (prealloc) {
-    if (!glfs_fallocate(fd, 0, off, len)) {
+  if (prealloc && !glfs_fallocate(fd, 0, off, len)) {
+    if (!needZero) {
       return 0;
     }
-    if (errno != ENOTSUP && errno != EOPNOTSUPP) {
+    /* file is already extended by fallocate mode 0 */
+  } else {
+    if (prealloc) {
+      if (errno != ENOTSUP && errno != EOPNOTSUPP && errno != ENOSYS) {
+        *errCode = errno;
+        LOG("gfapi", GB_LOG_ERROR, "glfs_fallocate(%s) on volume %s "
+            "for block %s of size %zu failed [%s]",
+            gbid, volume, name, len, strerror(*errCode));
+        goto rollback;
+      }
+      LOG("gfapi", GB_LOG_INFO, "glfs_fallocate is not supported on "
+          "volume %s, falling back to ftruncate + zerofill", volume);
+      needZero = true;
+    }
+
+    if (glusterBlockTruncate(fd, off + len)) {
       *errCode = errno;
-      LOG("gfapi", GB_LOG_ERROR, "glfs_fallocate(%s) on volume %s "
+      LOG("gfapi", GB_LOG_ERROR, "glfs_ftruncate(%s) on volume %s "
           "for block %s of size %zu failed [%s]",
-          gbid, volume, name, len, strerror(*errCode));
+          gbid, volume, name, (size_t)(off + len), strerror(*errCode));
       goto rollback;
     }
-    LOG("gfapi", GB_LOG_INFO, "glfs_fallocate is not supported on "
-        "volume %s, falling back to ftruncate%s", volume,
-        zerofill ? " + zerofill" : "");
   }
 
-  if (glusterBlockTruncate(fd, off + len)) {
-    *errCode = errno;
-    LOG("gfapi", GB_LOG_ERROR, "glfs_ftruncate(%s) on volume %s "
-        "for block %s of size %zu failed [%s]",
-        gbid, volume, name, (size_t)(off + len), strerror(*errCode));
-    return -1; 
-  }
-
-  if (prealloc && zerofill) {
-    ret = glusterBlockZeroFillRange(fd, off, len, gbid, volume, name,
-                                    errCode);
-    if (ret) {
-      goto rollback;
-    }
+  if (needZero && glusterBlockZeroFillRange(fd, off, len, gbid, volume,
+                                            name, errCode)) {
+    goto rollback;
   }
   return 0;
 
@@ -403,7 +419,7 @@ glusterBlockCreateEntry(struct glfs *glfs, blockCreateCli *blk, char *gbid,
     return 0;
   }
 
-    tgfd = glfs_creat(glfs, gbid,
+  tgfd = glfs_creat(glfs, gbid,
                     O_WRONLY | O_CREAT | O_EXCL | O_SYNC,
                     S_IRUSR | S_IWUSR);
   if (!tgfd) {
@@ -419,9 +435,7 @@ glusterBlockCreateEntry(struct glfs *glfs, blockCreateCli *blk, char *gbid,
                            blk->zerofill, gbid, blk->volume,
                            blk->block_name, errCode);
 
-
-unlink:
-  if (tgfd && glfs_close(tgfd) != 0) {
+  if (glfs_close(tgfd) != 0) {
     *errCode = errno;
     LOG("gfapi", GB_LOG_ERROR,
         "glfs_close(%s): on volume %s for block %s failed[%s]",
@@ -514,7 +528,7 @@ glusterBlockResizeEntry(struct glfs *glfs, blockModifySize *blk,
           "failed[%s]", blk->gbid, blk->volume, blk->block_name,
           blk->size, strerror(*errCode));
     }
-  }  
+  }
 
 close:
   if (glfs_close(tgfd) != 0) {
