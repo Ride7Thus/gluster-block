@@ -310,12 +310,14 @@ glusterBlockHelp(void)
       "  create  <volname/blockname> [ha <count>]\n"
       "                              [auth <enable|disable>]\n"
       "                              [prealloc <full|no>]\n"
+      "                              [zerofill <yes|no>]\n"
       "                              [storage <filename>]\n"
       "                              [ring-buffer <size-in-MB-units>]\n"
       "                              [block-size <size-in-Byte-units>]\n"
       "                              [io-timeout <N-in-Second>]\n"
       "                              <host1[,host2,...]> [size]\n"
-      "        create block device [defaults: ha 1, auth disable, prealloc full, size in bytes,\n"
+      "        create block device [defaults: ha 1, auth disable, prealloc full, zerofill no,\n"
+      "                             size in bytes,\n"
       "                             ring-buffer and block-size default size dependends on kernel,\n"
       "                             io-timeout 43s]\n"
       "\n"
@@ -633,6 +635,7 @@ glusterBlockCreate(int argcount, char **options, int json)
   blockCreateCli cobj = {{0}, };
   bool TAKE_SIZE=true;
   bool PREALLOC_OPT=false;
+  bool ZEROFILL_OPT=false;
 
 
   if (argcount <= optind) {
@@ -702,6 +705,7 @@ glusterBlockCreate(int argcount, char **options, int json)
       ret = convertStringToTrillianParse(options[optind++]);
       if(ret >= 0) {
         cobj.zerofill = ret;
+        ZEROFILL_OPT=true;
       } else {
         MSG(stderr, "'zerofill' option is incorrect");
         MSG(stderr, GB_CREATE_HELP_STR);
@@ -791,9 +795,9 @@ glusterBlockCreate(int argcount, char **options, int json)
       goto out;
     }
   } else {
-    if (PREALLOC_OPT) {
+    if (PREALLOC_OPT || ZEROFILL_OPT) {
       MSG(stderr, "Inadequate arguments for create:\n%s", GB_CREATE_HELP_STR);
-      MSG(stderr, "Hint: do not use [prealloc <full|no>] in combination with [storage <filename>] option");
+      MSG(stderr, "Hint: do not use [prealloc <full|no>] or [zerofill <yes|no>] in combination with [storage <filename>] option");
       LOG("cli", GB_LOG_ERROR,
           "failed with Inadequate args for create block %s on volume %s with hosts %s",
           cobj.block_name, cobj.volume, cobj.block_hosts);
@@ -808,6 +812,15 @@ glusterBlockCreate(int argcount, char **options, int json)
           cobj.block_name, cobj.volume, cobj.block_hosts);
       goto out;
     }
+  }
+
+  if (cobj.zerofill && !cobj.prealloc) {
+    MSG(stderr, "'zerofill yes' requires 'prealloc full'");
+    MSG(stderr, GB_CREATE_HELP_STR);
+    LOG("cli", GB_LOG_ERROR, "zerofill without prealloc for block <%s/%s>",
+        cobj.volume, cobj.block_name);
+    ret = -1;
+    goto out;
   }
 
   if (GB_STRDUP(cobj.block_hosts, options[optind++]) < 0) {
