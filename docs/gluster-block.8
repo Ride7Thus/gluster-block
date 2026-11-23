@@ -10,7 +10,9 @@ gluster-block - Gluster Block Storage Console Manager (command line utility)
 .SH SYNOPSIS
 .B gluster-block
 [\fBtimeout <seconds>\fR]
-<\fBcreate|list|info|delete|modify|replace|genconfig\fR>
+[\fB--wait\fR]
+[\fB--yes\fR]
+<\fBcreate|list|info|status|delete|modify|replace|genconfig\fR>
 <\fBvolname\fR[\fB/blockname\fR]>
 [\fB<args>\fR]
 [\fB--json*\fR]
@@ -21,12 +23,14 @@ gluster-block - Gluster Block Storage Console Manager (command line utility)
 The Gluster Block Storage Console Manager(\fBgluster-block\fR) is a CLI utility, which aims at making gluster backed block storage creation and maintenance as simple as possible.
 
 Note that the gluster-blockd daemon is responsible for block management, hence the daemon must be running on all servers.
+
+\fBcreate\fR and \fBmodify ... size\fR may take long, e.g. preallocating a large block on a dispersed volume. They return as soon as the request is validated and accepted, with \fBRESULT: IN-PROGRESS\fR and an \fBOPERATION-ID\fR, and finish in background. While such an operation runs, other modifying commands on the same volume fail at once with EBUSY, read only commands (\fBlist\fR, \fBinfo\fR, \fBstatus\fR, \fBgenconfig\fR) keep working. Use \fBstatus\fR to track the operation, or \fB--wait\fR to wait for its result.
 .PP
 
 
 .SH COMMANDS
 .SS
-\fBcreate\fR <VOLNAME/NEW-BLOCKNAME> [ha <COUNT>] [auth <enable|disable>] [prealloc <full|no>] [storage <filename>] [ring-buffer <size-in-MB-units>] [block-size <size-in-Byte-units>] [io-timeout <N in Second>] <HOST1[,HOST2,..]> [BYTES]
+\fBcreate\fR <VOLNAME/NEW-BLOCKNAME> [ha <COUNT>] [auth <enable|disable>] [prealloc <full|no>] [zerofill <yes|no>] [storage <filename>] [ring-buffer <size-in-MB-units>] [block-size <size-in-Byte-units>] [io-timeout <N in Second>] <HOST1[,HOST2,..]> [BYTES]
 create block device.
 .TP
 [ha <COUNT>]
@@ -36,7 +40,10 @@ multipath requirement for high availability (default: 1)
 authentication setting (default: disable)
 .TP
 [prealloc <full|no>]
-"full" mode preallocates space by writing zeros to storage (default: full)
+"full" mode preallocates the whole storage with fallocate, or by writing zeros where the volume does not support fallocate; "no" creates a thin (sparse) file. A resize later allocates the added space the same way. On a dispersed (erasure coded) volume a thin file allocates space on the fly, which can race with concurrent I/O, so "prealloc no" there asks for confirmation (see \fB--yes\fR). (default: full)
+.TP
+[zerofill <yes|no>]
+with prealloc full, additionally write zeros over the whole storage, for bricks where fallocate only reserves space (thin LVM, VDO). Much slower. (default: no)
 .TP
 [storage <filename>]
 existing file(only name) in the gluster volume, that needs to be linked while creating block (default: creates a new file)
@@ -66,6 +73,14 @@ list available block devices.
 .SS
 \fBinfo\fR <VOLNAME/BLOCKNAME>
 details about block device.
+.PP
+
+.SS
+\fBstatus\fR <VOLNAME> [<OPERATION-ID>]
+current or last long running operation (create, modify size) on the volume: operation id, block, node running it, phase, allocation progress, start time and result. STATE INTERRUPTED means the daemon running it stopped before it finished.
+.TP
+[<OPERATION-ID>]
+print the result of that operation, as the command itself would have printed it, exit code 115 (EINPROGRESS) while it is still running. Results are stored on the volume in /block-ops for a day, so this works from every node.
 .PP
 
 .SS
@@ -122,6 +137,16 @@ it is the time in seconds that cli can wait for daemon to respond (default: 300)
 .PP
 
 .SS
+[\fB--wait\fR]
+wait until a background create or modify size finishes and print its result, as synchronous commands do. The \fBtimeout\fR does not limit the operation itself. Setting the environment variable GB_CLI_WAIT=yes has the same effect.
+.PP
+
+.SS
+[\fB--yes\fR]
+do not ask for confirmation. Without a terminal such requests fail with exit code 228, e.g. a thin block ('prealloc no') on a dispersed volume.
+.PP
+
+.SS
 [\fB--json*\fR]
 used to request the output result in json format (default: plain text) and supported JSON formats: --json|--json-plain|--json-spaced|--json-pretty
 .PP
@@ -137,8 +162,23 @@ To create a block device of size 1GiB with timeout 300 seconds
 To create a block device of size 1GiB with auth enable
 .B # gluster-block create blockVol/sampleBlock auth enable ${HOST} 1GiB
 
-To create a block device of size 1GiB, by preallocating storage with zero fill
+To create a block device of size 1GiB, by preallocating storage
 .B # gluster-block create blockVol/sampleBlock prealloc full ${HOST} 1GiB
+
+To create a block device of size 1GiB, by preallocating storage and writing zeros
+.B # gluster-block create blockVol/sampleBlock prealloc full zerofill yes ${HOST} 1GiB
+
+To create a block device of size 1TiB and wait until it is ready
+.B # gluster-block --wait create blockVol/sampleBlock ${HOST} 1TiB
+
+To track a create or resize running in background
+.B # gluster-block status blockVol
+
+To get the result of a background operation, from any node
+.B # gluster-block status blockVol ${OPERATION_ID}
+
+To create a thin block on a dispersed volume without being asked
+.B # gluster-block --yes create blockVol/sampleBlock prealloc no ${HOST} 1GiB
 
 To create a thinly-provisioned block device of size 1GiB
 .B # gluster-block create blockVol/sampleBlock prealloc no ${HOST} 1GiB

@@ -94,7 +94,12 @@ You can run gluster-blockd as systemd service, note '/etc/sysconfig/gluster-bloc
 # gluster-block --help
 gluster-block (0.4)
 usage:
-  gluster-block [timeout <seconds>] <command> <volname[/blockname]> [<args>] [--json*]
+  gluster-block [timeout <seconds>] [--wait] [--yes] <command> <volname[/blockname]> [<args>] [--json*]
+
+  create and modify size return as soon as the request is accepted
+  (RESULT: IN-PROGRESS) and finish in background, use 'status' to
+  track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the
+  result instead.
 
 commands:
   create  <volname/blockname> [ha <count>]
@@ -106,12 +111,17 @@ commands:
                               [block-size <size-in-Byte-units>]
                               [io-timeout <N-in-Second>]
                               <host1[,host2,...]> [size]
-        create block device [defaults: ha 1, auth disable, prealloc full, size in bytes,
+        create block device [defaults: ha 1, auth disable, prealloc full, zerofill no,
+                             size in bytes,
                              ring-buffer and block-size default size dependends on kernel,
                              io-timeout 43s]
 
   list    <volname>
         list available block devices.
+
+  status  <volname> [<operation-id>]
+        current or last long running operation on the volume, or the
+        result of the given operation (exit 115 while it runs).
 
   info    <volname/blockname>
         details about block device.
@@ -141,6 +151,12 @@ common cli options: (fixed formats)
   timeout <seconds>
         it is the time in seconds that cli can wait for daemon to respond.
         [default: timeout 300]
+  --wait
+        wait until a background create or modify size finishes and print
+        its result. [default: return RESULT: IN-PROGRESS at once]
+  --yes
+        do not ask for confirmation, e.g. 'prealloc no' on a dispersed
+        volume.
   --json*
         used to request the output result in json format [default: plain text]
         supported JSON formats: --json|--json-plain|--json-spaced|--json-pretty
