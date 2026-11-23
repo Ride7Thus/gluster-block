@@ -114,6 +114,10 @@ rm -rf ${RPM_BUILD_ROOT}
      %attr(0644,-,-) %{_sharedstatedir}/gluster-block/gluster-block-caps.info
 
 %changelog
+* Mon Nov 23 2026 Ride7Thus - 0.5.19
+- Fix gluster-block-target.service on EL9, drop the unsupported .include
+- Require target-restore for targetctl
+
 * Mon Nov 23 2026 Ride7Thus - 0.5.18
 - Create and resize finish in background, new status command
 - Share operation results between nodes, confirm thin blocks on
