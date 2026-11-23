@@ -243,7 +243,7 @@ block_info_cli_1_svc_st(blockInfoCli *blk, struct svc_req *rqstp)
     goto optfail;
   }
 
-  GB_METALOCK_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
+  GB_METALOCK_RO_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
 
   if (blockGetMetaInfo(glfs, blk->block_name, info, &errCode)) {
     if (errCode == ENOENT) {

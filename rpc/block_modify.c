@@ -804,13 +804,13 @@ glusterBlockIsResizeFailed(MetaInfo *info)
 
 
 static blockResponse *
-block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
+blockModifySizeCliRun(blockModifySizeCli *blk)
 {
   int ret = -1;
   blockModifySize mobj = {{0},};
   blockRemoteResp *savereply = NULL;
   blockResponse *reply = NULL;
-  struct glfs *glfs;
+  struct glfs *glfs = NULL;
   struct glfs_fd *lkfd = NULL;
   MetaInfo *info = NULL;
   int asyncret = 0;
@@ -819,11 +819,12 @@ block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
   char *cSize = NULL;
   char *rSize = NULL;
   blockServerDefPtr list = NULL;
+  bool privGlfs = false;
 
 
   LOG("mgmt", GB_LOG_INFO,
-      "modify size cli request, volume=%s blockname=%s size=%zu",
-      blk->volume, blk->block_name, blk->size);
+      "modify size cli request, volume=%s blockname=%s size=%zu async=%d",
+      blk->volume, blk->block_name, blk->size, blk->async);
 
   if ((GB_ALLOC(reply) < 0) || (GB_ALLOC(savereply) < 0) ||
       (GB_ALLOC (info) < 0)) {
@@ -834,7 +835,7 @@ block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
   }
 
   errCode = 0;
-  glfs = glusterBlockVolumeInit(blk->volume, &errCode, &errMsg);
+  glfs = blockVolumeGet(blk->volume, &errCode, &errMsg, &privGlfs);
   if (!glfs) {
     LOG("mgmt", GB_LOG_ERROR,
         "glusterBlockVolumeInit(%s) for block %s failed [%s]",
@@ -932,6 +933,11 @@ block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
   GB_STRCPYSTATIC(mobj.gbid, info->gbid);
   mobj.size = blk->size;
 
+  blockOpBegin(lkfd, "modify-size", blk->block_name, info->gbid, blk->size);
+  blockOpPhase(blk->size > info->size ? "allocating storage" :
+               "shrinking storage");
+  gbAsyncDetach();
+
   ret = glusterBlockResizeEntry(glfs, &mobj, &errCode, &errMsg);
   if (ret) {
     errCode = ret;
@@ -943,6 +949,7 @@ block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
   GB_METAUPDATE_OR_GOTO(lock, glfs, mobj.block_name, mobj.volume,
                         errCode, errMsg, out, "SIZE: %zu\n",  mobj.size);
 
+  blockOpPhase("resizing targets");
   asyncret = glusterBlockModifySizeRemoteAsync(info, glfs, &mobj, &savereply);
   if (asyncret) {   /* asyncret decides result is success/fail */
     errCode = asyncret;
@@ -983,8 +990,55 @@ block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
 
   blockRemoteRespFree(savereply);
   GB_FREE(errMsg);
+  blockVolumePut(glfs, privGlfs);
 
   return reply;
+}
+
+
+static void
+blockModifySizeCliFree(void *data)
+{
+  blockModifySizeCli *blk = data;
+
+  if (!blk) {
+    return;
+  }
+  GB_FREE(blk->cmd);
+  GB_FREE(blk);
+}
+
+
+static blockResponse *
+blockModifySizeCliRunAsync(void *data)
+{
+  return blockModifySizeCliRun(data);
+}
+
+
+static blockResponse *
+block_modify_size_cli_1_svc_st(blockModifySizeCli *blk, struct svc_req *rqstp)
+{
+  blockModifySizeCli *copy = NULL;
+
+  if (!blk->async) {
+    return blockModifySizeCliRun(blk);
+  }
+
+  /* the RPC arguments are freed once we return, the worker needs a copy */
+  if (GB_ALLOC(copy) < 0) {
+    return blockModifySizeCliRun(blk);
+  }
+  memcpy(copy, blk, sizeof(*copy));
+  copy->cmd = NULL;
+  if (GB_STRDUP(copy->cmd, blk->cmd ? blk->cmd : "") < 0) {
+    blockModifySizeCliFree(copy);
+    return blockModifySizeCliRun(blk);
+  }
+
+  return gbAsyncRun("modify-size", blk->volume, blk->block_name,
+                    blk->json_resp, blockModifySizeCliRunAsync, copy,
+                    blockModifySizeCliFree);
 }
 
 

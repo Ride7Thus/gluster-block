@@ -17,16 +17,11 @@
 # define  GB_ZEROS_BUF_SIZE  4194304  /* 4MiB */
 
 
-struct glfs *
-glusterBlockVolumeInit(char *volume, int *errCode, char **errMsg)
+static struct glfs *
+glusterBlockVolumeNew(char *volume, int *errCode, char **errMsg)
 {
   struct glfs *glfs;
   int ret;
-
-  glfs = queryCache(volume);
-  if (glfs) {
-    return glfs;
-  }
 
   glfs = glfs_new(volume);
   if (!glfs) {
@@ -74,18 +69,46 @@ glusterBlockVolumeInit(char *volume, int *errCode, char **errMsg)
     goto out;
   }
 
-  if (appendNewEntry(volume, glfs)) {
-    *errCode = ENOMEM;
-    LOG("gfapi", GB_LOG_ERROR, "allocation failed in appendNewEntry(%s)", volume);
-    goto out;
-  }
-
   return glfs;
 
  out:
   glfs_fini(glfs);
 
   return NULL;
+}
+
+
+struct glfs *
+glusterBlockVolumeInit(char *volume, int *errCode, char **errMsg)
+{
+  struct glfs *glfs;
+
+  glfs = queryCache(volume);
+  if (glfs) {
+    return glfs;
+  }
+
+  glfs = glusterBlockVolumeNew(volume, errCode, errMsg);
+  if (!glfs) {
+    return NULL;
+  }
+
+  if (appendNewEntry(volume, glfs)) {
+    *errCode = ENOMEM;
+    LOG("gfapi", GB_LOG_ERROR, "allocation failed in appendNewEntry(%s)", volume);
+    glfs_fini(glfs);
+    return NULL;
+  }
+
+  return glfs;
+}
+
+
+/* not cached, the caller owns it and releases it with glfs_fini() */
+struct glfs *
+glusterBlockVolumeInitPrivate(char *volume, int *errCode, char **errMsg)
+{
+  return glusterBlockVolumeNew(volume, errCode, errMsg);
 }
 
 

@@ -54,6 +54,16 @@ typedef struct MetaInfo {
 struct glfs *
 glusterBlockVolumeInit(char *volume, int *errCode, char **errMsg);
 
+struct glfs *
+glusterBlockVolumeInitPrivate(char *volume, int *errCode, char **errMsg);
+
+int
+glusterBlockMetaLock(struct glfs_fd *lkfd, const char *volume, bool readonly,
+                     int *errCode, char **errMsg);
+
+void
+blockOpEnd(struct glfs_fd *lkfd, int errCode, const char *errMsg);
+
 int
 glusterBlockCreateEntry(struct glfs *glfs, blockCreateCli *blk, char *gbid,
                         int *errCode, char **errMsg);

@@ -53,7 +53,7 @@ block_list_cli_1_svc_st(blockListCli *blk, struct svc_req *rqstp)
     goto optfail;
   }
 
-  GB_METALOCK_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
+  GB_METALOCK_RO_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
 
   tgmdfd = glfs_opendir (glfs, GB_METADIR);
   if (!tgmdfd) {

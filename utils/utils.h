@@ -87,6 +87,7 @@
 
 /* Target List */
 # define  FAILED_LIST               "failed in list"
+# define  FAILED_STATUS             "failed in status"
 
 /* Target Info */
 # define  FAILED_INFO               "failed in info"
@@ -237,18 +238,20 @@ extern struct gbConf *gbConf;
             GB_FREE(_tmp_);                                            \
           } while (0)
 
+/* modifying operations: fail with EBUSY while a long operation runs */
 # define  GB_METALOCK_OR_GOTO(lkfd, volume, errCode, errMsg, label)  \
           do {                                                       \
-            struct flock _lock_ = {0, };                             \
-            _lock_.l_type = F_WRLCK;                                 \
-            if (glfs_posix_lock (lkfd, F_SETLKW, &_lock_)) {         \
-              LOG("mgmt", GB_LOG_ERROR, "glfs_posix_lock() on "      \
-                  "volume %s failed[%s]", volume, strerror(errno));  \
-              errCode = errno;                                       \
-              if (!errMsg) {                                         \
-                    GB_ASPRINTF (&errMsg, "Not able to acquire "     \
-                        "lock on %s[%s]", volume, strerror(errCode));\
-              }                                                      \
+            if (glusterBlockMetaLock(lkfd, volume, false,            \
+                                     &(errCode), &(errMsg)) < 0) {   \
+              goto label;                                            \
+            }                                                        \
+          } while (0)
+
+/* read only operations: go on without the lock while it is busy */
+# define  GB_METALOCK_RO_OR_GOTO(lkfd, volume, errCode, errMsg, label) \
+          do {                                                       \
+            if (glusterBlockMetaLock(lkfd, volume, true,             \
+                                     &(errCode), &(errMsg)) < 0) {   \
               goto label;                                            \
             }                                                        \
           } while (0)
@@ -316,6 +319,7 @@ extern struct gbConf *gbConf;
 # define  GB_METAUNLOCK(lkfd, volume, ret, errMsg)                   \
           do {                                                       \
             struct flock _lock_ = {0, };                             \
+            blockOpEnd(lkfd, ret, errMsg);                           \
             _lock_.l_type = F_UNLCK;                                 \
             if (glfs_posix_lock(lkfd, F_SETLK, &_lock_)) {           \
               if (!errMsg) {                                         \
@@ -461,6 +465,8 @@ typedef enum gbCliCmdlineOption {
   GB_CLI_REPLACE,
   GB_CLI_RELOAD,
   GB_CLI_GENCONFIG,
+  GB_CLI_STATUS,
+  GB_CLI_WAIT,
   GB_CLI_HELP,
   GB_CLI_HYPHEN_HELP,
   GB_CLI_VERSION,
@@ -482,6 +488,8 @@ static const char *const gbCliCmdlineOptLookup[] = {
   [GB_CLI_REPLACE]        = "replace",
   [GB_CLI_RELOAD]         = "reload",
   [GB_CLI_GENCONFIG]      = "genconfig",
+  [GB_CLI_STATUS]         = "status",
+  [GB_CLI_WAIT]           = "--wait",
   [GB_CLI_HELP]           = "help",
   [GB_CLI_HYPHEN_HELP]    = "--help",
   [GB_CLI_VERSION]        = "version",

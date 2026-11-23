@@ -14,6 +14,7 @@
 # include  "config.h"
 
 # include <arpa/inet.h>
+# include <unistd.h>
 
 # define  GB_CREATE_HELP_STR  "gluster-block create <volname/blockname> "      \
                                 "[ha <count>] [auth <enable|disable>] "        \
@@ -35,6 +36,9 @@
                               "enable-tpg <host> [--json*]"
 # define  GB_INFO_HELP_STR    "gluster-block info <volname/blockname> [--json*]"
 # define  GB_LIST_HELP_STR    "gluster-block list <volname> [--json*]"
+# define  GB_STATUS_HELP_STR  "gluster-block status <volname> [<operation-id>] [--json*]"
+
+# define  GB_CLI_WAIT_POLL_SEC  2
 
 
 # define  GB_ARGCHECK_OR_RETURN(argcount, count, cmd, helpstr)        \
@@ -49,6 +53,7 @@ extern const char *argp_program_version;
 
 struct timeval TIMEOUT;           /* cli process to daemon cli thread timeout */
 static size_t cliOptTimeout;
+static bool cliOptWait;           /* wait for background operations to finish */
 
 gbProcessCtx gbCtx = GB_CLI_MODE; /* set process mode */
 
@@ -61,7 +66,8 @@ typedef enum clioperations {
   MODIFY_SIZE_CLI = 6,
   REPLACE_CLI = 7,
   GENCONF_CLI = 8,
-  RELOAD_CLI = 9
+  RELOAD_CLI = 9,
+  STATUS_CLI = 10
 } clioperations;
 
 
@@ -115,7 +121,11 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   blockModifySizeCli *modify_size_obj;
   blockReplaceCli *replace_obj;
   blockGenConfigCli *genconfig_obj;
+  blockStatusCli *status_obj;
+  blockStatusCli wait_obj = {{0},};
   blockResponse reply = {0,};
+  blockResponse wait_reply;
+  enum clnt_stat wait_stat;
   char          errMsg[2048] = {0};
   gbConfig *conf = NULL;
   char *cli_timeout;
@@ -257,6 +267,52 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
       goto out;
     }
     break;
+  case STATUS_CLI:
+    status_obj = cobj;
+    if (block_status_cli_1(status_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s status on volume %s failed",
+          clnt_sperror(clnt, "block_status_cli_1"), status_obj->volume);
+      goto out;
+    }
+    break;
+  }
+
+  /*
+   * The daemon finishes create and resize in background and returns the
+   * operation id in xdata. With --wait poll it until the operation is done
+   * and print its final result, like the synchronous commands did.
+   */
+  if (cliOptWait && !reply.exit && reply.xdata.xdata_len &&
+      (opt == CREATE_CLI || opt == MODIFY_SIZE_CLI)) {
+    GB_STRCPYSTATIC(wait_obj.volume, opt == CREATE_CLI ?
+                    ((blockCreateCli *)cobj)->volume :
+                    ((blockModifySizeCli *)cobj)->volume);
+    snprintf(wait_obj.op_id, sizeof(wait_obj.op_id), "%.*s",
+             (int)reply.xdata.xdata_len, reply.xdata.xdata_val);
+
+    while (1) {
+      sleep(GB_CLI_WAIT_POLL_SEC);
+      memset(&wait_reply, 0, sizeof(wait_reply));
+      wait_stat = block_status_cli_1(&wait_obj, &wait_reply, clnt);
+      if (wait_stat != RPC_SUCCESS) {
+        LOG("cli", GB_LOG_ERROR, "%s waiting for operation %s failed",
+            clnt_sperror(clnt, "block_status_cli_1"), wait_obj.op_id);
+        snprintf(errMsg, sizeof(errMsg), "Lost connection to gluster-block "
+                 "daemon while waiting for operation %s.\nhint: run "
+                 "'gluster-block status %s' to check it", wait_obj.op_id,
+                 wait_obj.volume);
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+        memset(&reply, 0, sizeof(reply));
+        goto out;
+      }
+      if (wait_reply.exit == EINPROGRESS) {
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&wait_reply);
+        continue;
+      }
+      clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+      reply = wait_reply;
+      break;
+    }
   }
 
  out:
@@ -304,7 +360,12 @@ glusterBlockHelp(void)
   MSG(stdout,
       PACKAGE_NAME" ("PACKAGE_VERSION")\n"
       "usage:\n"
-      "  gluster-block [timeout <seconds>] <command> <volname[/blockname]> [<args>] [--json*]\n"
+      "  gluster-block [timeout <seconds>] [--wait] <command> <volname[/blockname]> [<args>] [--json*]\n"
+      "\n"
+      "  create and modify size return as soon as the request is accepted\n"
+      "  (RESULT: IN-PROGRESS) and finish in background, use 'status' to\n"
+      "  track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the\n"
+      "  result instead.\n"
       "\n"
       "commands:\n"
       "  create  <volname/blockname> [ha <count>]\n"
@@ -323,6 +384,10 @@ glusterBlockHelp(void)
       "\n"
       "  list    <volname>\n"
       "        list available block devices.\n"
+      "\n"
+      "  status  <volname> [<operation-id>]\n"
+      "        current or last long running operation on the volume, or the\n"
+      "        result of the given operation (exit 115 while it runs).\n"
       "\n"
       "  info    <volname/blockname>\n"
       "        details about block device.\n"
@@ -352,6 +417,9 @@ glusterBlockHelp(void)
       "  timeout <seconds>\n"
       "        it is the time in seconds that cli can wait for daemon to respond.\n"
       "        [default: timeout 300]\n"
+      "  --wait\n"
+      "        wait until a background create or modify size finishes and print\n"
+      "        its result. [default: return RESULT: IN-PROGRESS at once]\n"
       "  --json*\n"
       "        used to request the output result in json format [default: plain text]\n"
       "        supported JSON formats: --json|--json-plain|--json-spaced|--json-pretty\n"
@@ -605,6 +673,7 @@ glusterBlockModify(int argcount, char **options, int json)
     GB_STRCPYSTATIC(msobj.block_name, block);
     msobj.size = sparse_ret;  /* size is unsigned long long */
     msobj.json_resp = json;
+    msobj.async = true;
     getCommandString(&msobj.cmd, argcount, options);
 
     ret = glusterBlockCliRPC_1(&msobj, MODIFY_SIZE_CLI);
@@ -858,6 +927,7 @@ glusterBlockCreate(int argcount, char **options, int json)
   }
 
   getCommandString(&cobj.cmd, argcount, options);
+  cobj.async = true;
   ret = glusterBlockCliRPC_1(&cobj, CREATE_CLI);
   if (ret) {
     LOG("cli", GB_LOG_ERROR,
@@ -868,6 +938,44 @@ glusterBlockCreate(int argcount, char **options, int json)
  out:
   GB_FREE(cobj.block_hosts);
   GB_FREE(cobj.cmd);
+
+  return ret;
+}
+
+
+static int
+glusterBlockStatus(int argcount, char **options, int json)
+{
+  blockStatusCli cobj = {{0},};
+  int ret = -1;
+
+
+  if (argcount != 2 && argcount != 3) {
+    MSG(stderr, "Inadequate arguments for status:\n%s", GB_STATUS_HELP_STR);
+    return -1;
+  }
+  cobj.json_resp = json;
+
+  if (argcount == 3) {
+    if (strlen(options[2]) >= sizeof(cobj.op_id)) {
+      MSG(stderr, "invalid operation id '%s'", options[2]);
+      return -1;
+    }
+    GB_STRCPYSTATIC(cobj.op_id, options[2]);
+  }
+
+  if (!glusterBlockIsVolListAcceptable(options[1]) || strchr(options[1], ',')) {
+    MSG(stderr, "volume name(%s) should contain only aplhanumeric,'-' "
+        "and '_' characters", options[1]);
+    return -1;
+  }
+  GB_STRCPYSTATIC(cobj.volume, options[1]);
+
+  ret = glusterBlockCliRPC_1(&cobj, STATUS_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "failed getting status of volume %s",
+        cobj.volume);
+  }
 
   return ret;
 }
@@ -1162,6 +1270,13 @@ glusterBlockParseArgs(int count, char **options, size_t opt, int json)
       }
       goto out;
 
+    case GB_CLI_STATUS:
+      ret = glusterBlockStatus(count, options, json);
+      if (ret) {
+        LOG("cli", GB_LOG_ERROR, FAILED_STATUS);
+      }
+      goto out;
+
     case GB_CLI_INFO:
       ret = glusterBlockInfo(count, options, json);
       if (ret) {
@@ -1234,6 +1349,7 @@ main(int argc, char *argv[])
   int count = 1;
   int args = argc;
   int json = GB_JSON_NONE;
+  char *env;
   int ret;
 
 
@@ -1248,6 +1364,11 @@ main(int argc, char *argv[])
 
   if(initLogging()) {
     goto fail;
+  }
+
+  if ((env = getenv("GB_CLI_WAIT")) &&
+      convertStringToTrillianParse(env) == 1) {
+    cliOptWait = true;
   }
 
   while (1) {
@@ -1271,6 +1392,16 @@ main(int argc, char *argv[])
       }
       args = args - 2;
       count = count + 2;
+      continue;
+    }
+    if (opt == GB_CLI_WAIT) {
+      if (args <= 2) {     /* some command is manditory */
+        glusterBlockHelp();
+        goto fail;
+      }
+      cliOptWait = true;
+      args = args - 1;
+      count = count + 1;
       continue;
     }
 

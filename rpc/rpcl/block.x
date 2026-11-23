@@ -72,6 +72,7 @@ struct blockCreateCli {
   bool      auth_mode;
   bool      prealloc;
   bool      zerofill;
+  bool      async;                /* return IN-PROGRESS, finish in background */
   char      storage[255];
   char      block_name[255];
   string    block_hosts<>;
@@ -131,7 +132,14 @@ struct blockModifySizeCli {
   char      volume[255];
   u_quad_t  size;
   bool      force;
+  bool      async;                /* return IN-PROGRESS, finish in background */
   string    cmd<>;
+  enum JsonResponseFormat     json_resp;
+};
+
+struct blockStatusCli {
+  char      volume[255];
+  char      op_id[38];            /* empty: whole volume, else one operation */
   enum JsonResponseFormat     json_resp;
 };
 
@@ -183,5 +191,6 @@ program GLUSTER_BLOCK_CLI {
     blockResponse BLOCK_MODIFY_SIZE_CLI(blockModifySizeCli) = 7;
     blockResponse BLOCK_GEN_CONFIG_CLI(blockGenConfigCli) = 8;
     blockResponse BLOCK_RELOAD_CLI(blockReloadCli) = 9;
+    blockResponse BLOCK_STATUS_CLI(blockStatusCli) = 10;
   } = 1;
 } = 212153113; /* B2 L12 O15 C3 K11 C3 */

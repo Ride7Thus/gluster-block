@@ -260,7 +260,7 @@ getSoTgArraysForAllVolume(struct soTgObj *obj, blockGenConfigCli *blk,
       goto optfail;
     }
 
-    GB_METALOCK_OR_GOTO(lkfd, vols->data[i], *errCode, *errMsg, out);
+    GB_METALOCK_RO_OR_GOTO(lkfd, vols->data[i], *errCode, *errMsg, out);
 
     tgmdfd = glfs_opendir(glfs, GB_METADIR);
     if (!tgmdfd) {

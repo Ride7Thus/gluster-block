@@ -364,6 +364,7 @@ glusterBlockCallRPC_1(char *host, void *cobj,
   case INFO_SRV:
   case REPLACE_GET_PORTAL_TPG_SRV:
   case GENCONFIG_SRV:
+  case STATUS_SRV:
       goto out;
   case REPLACE_SRV:
       *rpc_sent = TRUE;

@@ -68,7 +68,8 @@ typedef enum operations {
   INFO_SRV,
   VERSION_SRV,
   GENCONFIG_SRV,
-  RELOAD_SRV
+  RELOAD_SRV,
+  STATUS_SRV
 } operations;
 
 
@@ -130,6 +131,28 @@ typedef struct blockRemoteCreateResp {
 
 
 extern pthread_mutex_t lock;
+
+
+/* block_status.c: long running operations and volume status */
+typedef blockResponse *(*gbAsyncFn)(void *arg);
+
+blockResponse *gbAsyncRun(const char *opname, const char *volume,
+                          const char *block, int json, gbAsyncFn fn,
+                          void *arg, void (*freeArg)(void *));
+
+bool gbAsyncInWorker(void);
+
+void gbAsyncDetach(void);
+
+struct glfs *blockVolumeGet(char *volume, int *errCode, char **errMsg,
+                            bool *priv);
+
+void blockVolumePut(struct glfs *glfs, bool priv);
+
+void blockOpBegin(struct glfs_fd *lkfd, const char *op, const char *block,
+                  const char *gbid, size_t size);
+
+void blockOpPhase(const char *phase);
 
 
 int mapJsonFlagToJsonCstring(int jsonflag);

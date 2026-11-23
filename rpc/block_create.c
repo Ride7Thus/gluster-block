@@ -945,7 +945,7 @@ blockCreateCliFormatResponse(struct glfs *glfs, blockCreateCli *blk,
 
 
 static blockResponse *
-block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
+blockCreateCliRun(blockCreateCli *blk)
 {
   int errCode = -1;
   uuid_t uuid;
@@ -961,14 +961,16 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
   bool *resultCaps = NULL;
   struct gbXdata *xdata = NULL;
   char *cmdlog = NULL;
+  bool privGlfs = false;
 
 
   LOG("mgmt", GB_LOG_INFO,
       "create cli request, volume=%s blockname=%s mpath=%d blockhosts=%s "
-      "authmode=%d size=%lu rbsize=%d blksize=%d io_timeout=%d",
+      "authmode=%d size=%lu rbsize=%d blksize=%d io_timeout=%d "
+      "prealloc=%d zerofill=%d async=%d",
       blk->volume, blk->block_name, blk->mpath, blk->block_hosts,
       blk->auth_mode, blk->size, blk->rb_size, blk->blk_size,
-      blk->io_timeout);
+      blk->io_timeout, blk->prealloc, blk->zerofill, blk->async);
 
   if (GB_ALLOC(reply) < 0) {
     goto optfail;
@@ -1008,7 +1010,7 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
     errCode = 0;
   }
 
-  glfs = glusterBlockVolumeInit(blk->volume, &errCode, &errMsg);
+  glfs = blockVolumeGet(blk->volume, &errCode, &errMsg, &privGlfs);
   if (!glfs) {
     LOG("mgmt", GB_LOG_ERROR,
         "glusterBlockVolumeInit(%s) for block %s with hosts %s failed",
@@ -1046,6 +1048,8 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
   uuid_generate(uuid);
   uuid_unparse(uuid, gbid);
 
+  blockOpBegin(lkfd, "create", blk->block_name, gbid, blk->size);
+
   if (cobj.prio_path[0]) {
     GB_METAUPDATE_OR_GOTO(lock, glfs, blk->block_name, blk->volume,
                           errCode, errMsg, exist,
@@ -1059,6 +1063,11 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
                           "HA: %d\nENTRYCREATE: INPROGRESS\n",
                           blk->volume, gbid, blk->mpath);
   }
+
+  /* the block is recorded as INPROGRESS, the rest may take long */
+  blockOpPhase(blk->prealloc && !strlen(blk->storage) ?
+               "allocating storage" : "creating storage");
+  gbAsyncDetach();
 
   if (glusterBlockCreateEntry(glfs, blk, gbid, &errCode, &errMsg)) {
     LOG("mgmt", GB_LOG_ERROR, "%s volume: %s block: %s file: %s host: %s",
@@ -1148,6 +1157,7 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
                           errCode, errMsg, exist, "PASSWORD: %s\n", passwd);
   }
 
+  blockOpPhase("configuring targets");
   errCode = glusterBlockCreateRemoteAsync(list, blk->mpath,
                                           glfs, &cobj, &savereply);
   if (errCode) {
@@ -1168,6 +1178,9 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
   }
 
  exist:
+  /* the remote error is only in savereply, record it for 'status' */
+  blockOpEnd(lkfd, errCode, errMsg ? errMsg :
+             (savereply ? savereply->errMsg : NULL));
   GB_METAUNLOCK(lkfd, blk->volume, errCode, errMsg);
 
  out:
@@ -1195,8 +1208,57 @@ block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
   GB_FREE (cobj.block_hosts);
   GB_FREE(resultCaps);
   GB_FREE(xdata);
+  blockVolumePut(glfs, privGlfs);
 
   return reply;
+}
+
+
+static void
+blockCreateCliFree(void *data)
+{
+  blockCreateCli *blk = data;
+
+  if (!blk) {
+    return;
+  }
+  GB_FREE(blk->block_hosts);
+  GB_FREE(blk->cmd);
+  GB_FREE(blk);
+}
+
+
+static blockResponse *
+blockCreateCliRunAsync(void *data)
+{
+  return blockCreateCliRun(data);
+}
+
+
+static blockResponse *
+block_create_cli_1_svc_st(blockCreateCli *blk, struct svc_req *rqstp)
+{
+  blockCreateCli *copy = NULL;
+
+  if (!blk->async) {
+    return blockCreateCliRun(blk);
+  }
+
+  /* the RPC arguments are freed once we return, the worker needs a copy */
+  if (GB_ALLOC(copy) < 0) {
+    return blockCreateCliRun(blk);
+  }
+  memcpy(copy, blk, sizeof(*copy));
+  copy->block_hosts = NULL;
+  copy->cmd = NULL;
+  if (GB_STRDUP(copy->block_hosts, blk->block_hosts ? blk->block_hosts : "") < 0 ||
+      GB_STRDUP(copy->cmd, blk->cmd ? blk->cmd : "") < 0) {
+    blockCreateCliFree(copy);
+    return blockCreateCliRun(blk);
+  }
+
+  return gbAsyncRun("create", blk->volume, blk->block_name, blk->json_resp,
+                    blockCreateCliRunAsync, copy, blockCreateCliFree);
 }
 
 bool_t

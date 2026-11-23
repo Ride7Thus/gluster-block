@@ -107,6 +107,7 @@ glusterBlockBuildMinCaps(void *data, operations opt)
   case INFO_SRV:
   case VERSION_SRV:
   case GENCONFIG_SRV:
+  case STATUS_SRV:
     break;
   }
 

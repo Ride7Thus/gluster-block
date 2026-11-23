@@ -22,6 +22,10 @@ BLKNAME="block-volume"
 SBLKNAME="sblock-volume"
 BRKDIR="/brick"
 
+# create and resize finish in background by default, most of the tests
+# below expect the result right away
+export GB_CLI_WAIT=yes
+
 
 function TEST()
 {
@@ -96,6 +100,21 @@ TEST gluster-block help
 # Simple block create/delete
 TEST gluster-block create ${VOLNAME}/${BLKNAME} ${HOST} 1MiB
 TEST gluster-block delete ${VOLNAME}/${BLKNAME}
+
+# Background create: IN-PROGRESS at once, read only operations keep working
+TEST "GB_CLI_WAIT=no gluster-block create ${VOLNAME}/${BLKNAME} zerofill yes ${HOST} 256MiB | grep -q 'RESULT: IN-PROGRESS'"
+TEST "gluster-block status ${VOLNAME} | grep -q 'OPERATION: create'"
+TEST gluster-block list ${VOLNAME}
+for i in $(seq 1 300); do
+  gluster-block status ${VOLNAME} | grep -q 'STATUS: IDLE' && break
+  sleep 1
+done
+TEST "gluster-block status ${VOLNAME} | grep -q 'STATE: SUCCESS'"
+TEST "gluster-block status ${VOLNAME} --json | grep -q LAST-OPERATION"
+TEST gluster-block delete ${VOLNAME}/${BLKNAME}
+
+# zerofill needs prealloc
+TEST "! gluster-block create ${VOLNAME}/${BLKNAME} prealloc no zerofill yes ${HOST} 1MiB"
 
 # Simple block create/delete with 'timeout' set
 TEST gluster-block timeout 350 create ${VOLNAME}/${BLKNAME} ${HOST} 1MiB
