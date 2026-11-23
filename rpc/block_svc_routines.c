@@ -77,11 +77,12 @@ blockStr2arrayAddToJsonObj(json_object *json_obj, char *string, char *label)
     return;
 
   json_array = json_object_new_array();
-  tmp = strtok (string, " ");
+  char *tokSave = NULL;
+  tmp = strtok_r(string, " ", &tokSave);
   while (tmp != NULL)
   {
     json_object_array_add(json_array, GB_JSON_OBJ_TO_STR(tmp));
-    tmp = strtok (NULL, " ");
+    tmp = strtok_r(NULL, " ", &tokSave);
   }
   json_object_object_add(json_obj, label, json_array);
 }

@@ -365,7 +365,8 @@ gbDependencyVersionCompare(int dependencyName, char *version)
     return ret;
   }
 
-  token = strtok(verStr, ".-");
+  char *tokSave = NULL;
+  token = strtok_r(verStr, ".-", &tokSave);
   while( token != NULL ) {
     done = false;
     for (j = 0; j < strlen(token); j++) { /* say if version is 2.1.fb49, parse fb49 */
@@ -385,7 +386,7 @@ gbDependencyVersionCompare(int dependencyName, char *version)
         break;
       }
     }
-    token = strtok(NULL, ".-");
+    token = strtok_r(NULL, ".-", &tokSave);
     i++;
   }
 
@@ -697,7 +698,8 @@ gbClipoffSensitiveDetailsAtExec(char **data)
    * 2. Output from targetcli
    */
   if (strstr(cmd, "password=") || strstr(cmd, "Parameter password is now")) {
-    line = strtok(cmd, "\n");
+    char *tokSave = NULL;
+    line = strtok_r(cmd, "\n", &tokSave);
     while (line) {
       ptr = strstr(line, "password=");
       if (!ptr) {
@@ -725,7 +727,7 @@ gbClipoffSensitiveDetailsAtExec(char **data)
         GB_FREE(tmp);
         tmp = res;
       }
-      line = strtok(NULL, "\n");
+      line = strtok_r(NULL, "\n", &tokSave);
     }
     GB_FREE(*data);
     *data = res;

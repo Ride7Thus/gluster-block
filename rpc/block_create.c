@@ -63,14 +63,16 @@ removeDuplicateSubstr(char **line)
     return;
   }
 
-  /* Split string into tokens */
-  element = strtok(temp, " ");
+  /* Split string into tokens, reentrant: background operations run in
+   * parallel with the CLI thread */
+  char *tokSave = NULL;
+  element = strtok_r(temp, " ", &tokSave);
   while (element) {
     if (!strstr(out, element)) {
       GB_STRCAT(out, element, len);
       GB_STRCAT(out, " ", 2);
     }
-    element = strtok(NULL, " ");
+    element = strtok_r(NULL, " ", &tokSave);
   }
 
   GB_FREE(*line);
@@ -180,7 +182,8 @@ blockRemoteCreateRespParse(char *output, blockRemoteCreateResp **savereply)
   }
 
   /* get the first line */
-  line = strtok(output, "\n");
+  char *tokSave = NULL;
+  line = strtok_r(output, "\n", &tokSave);
   while (line)
   {
     switch (blockRemoteCreateRespEnumParse(line)) {
@@ -245,7 +248,7 @@ blockRemoteCreateRespParse(char *output, blockRemoteCreateResp **savereply)
       break;
     }
 
-    line = strtok(NULL, "\n");
+    line = strtok_r(NULL, "\n", &tokSave);
   }
 
   *savereply = local;

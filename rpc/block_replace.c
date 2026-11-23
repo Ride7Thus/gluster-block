@@ -823,7 +823,8 @@ block_replace_1_svc_st(blockReplace *blk, struct svc_req *rqstp)
     goto out;
   }
   GB_FREE(exec);
-  tpg = strtok(reply->out, "\n");
+  char *tokSave = NULL;
+  tpg = strtok_r(reply->out, "\n", &tokSave);
 
   if (GB_ASPRINTF(&path, "%s/%s%s/%s/portals", GB_TGCLI_ISCSI_PATH,
                   GB_TGCLI_IQN_PREFIX, blk->gbid, tpg) == -1) {

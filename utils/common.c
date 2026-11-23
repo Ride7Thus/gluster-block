@@ -278,12 +278,15 @@ getCharArrayFromDelimitedStr(char *str, char delim)
     goto out;
   }
 
-  tok = strtok(tmp, &delim);
+  /* delim is a single char, strtok wants a string */
+  char delims[2] = {delim, '\0'};
+  char *tokSave = NULL;
+  tok = strtok_r(tmp, delims, &tokSave);
   for (i = 0; tok != NULL; i++) {
     if (GB_STRDUP(arr->data[i], tok) < 0) {
       goto out;
     }
-    tok = strtok(NULL, &delim);
+    tok = strtok_r(NULL, delims, &tokSave);
   }
 
   GB_FREE(base);

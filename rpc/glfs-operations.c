@@ -680,7 +680,8 @@ static int
 blockStuffMetaInfo(MetaInfo *info, char *line)
 {
   char *tmp = strdup(line);
-  char *opt = strtok(tmp, ":");
+  char *tokSave = NULL;
+  char *opt = tmp ? strtok_r(tmp, ":", &tokSave) : NULL;
   bool flag = 0;
   int  ret = -1;
   size_t i;
@@ -894,6 +895,7 @@ blockGetMetaInfo(struct glfs* glfs, char* metafile, MetaInfo *info,
   char line[1024];
   char fpath[PATH_MAX] = {0};
   char *tmp;
+  char *tokSave;
   int ret;
 
   snprintf(fpath, sizeof fpath, "%s/%s", GB_METADIR, metafile);
@@ -909,7 +911,8 @@ blockGetMetaInfo(struct glfs* glfs, char* metafile, MetaInfo *info,
   }
 
   while ((ret = glfs_read (tgmfd, line, sizeof(line), 0)) > 0) {
-    tmp = strtok(line,"\n");
+    tokSave = NULL;
+    tmp = strtok_r(line, "\n", &tokSave);
     if (!tmp) {
       continue;
     }
