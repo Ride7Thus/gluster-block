@@ -18,6 +18,10 @@
 # define   GB_DELIMITER         ','
 # define   CLI_TIMEOUT_DEF      300
 
+/* create needs a confirmation from the user, see 'prealloc no' on
+ * dispersed volumes */
+# define   GB_CONFIRM_REQUIRED  228
+
 
 typedef struct blockServerDef {
   size_t nhosts;

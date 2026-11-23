@@ -73,6 +73,7 @@ struct blockCreateCli {
   bool      prealloc;
   bool      zerofill;
   bool      async;                /* return IN-PROGRESS, finish in background */
+  bool      thin_confirmed;       /* user accepted thin file on dispersed vol */
   char      storage[255];
   char      block_name[255];
   string    block_hosts<>;

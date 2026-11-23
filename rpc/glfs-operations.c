@@ -104,6 +104,57 @@ glusterBlockVolumeInit(char *volume, int *errCode, char **errMsg)
 }
 
 
+/*
+ * 1 if the volume is dispersed (erasure coded), 0 if not, -errno if unknown.
+ *
+ * gfapi does not expose the volume type, look for the cluster/disperse
+ * translator in the client volfile, the same way tcmu-runner does.
+ * glfs_get_volfile() returns the missing buffer size as a negative value.
+ */
+int
+glusterBlockVolumeIsDispersed(struct glfs *glfs)
+{
+  char *volfile = NULL;
+  char *line, *tokSave = NULL;
+  char type[128];
+  ssize_t ret;
+  size_t len;
+  int found = 0;
+
+  ret = glfs_get_volfile(glfs, NULL, 0);
+  if (!ret) {
+    return -ENODATA;
+  }
+  if (ret > 0) {
+    return -EIO;
+  }
+
+  len = (size_t)-ret;
+  if (GB_ALLOC_N(volfile, len + 1) < 0) {
+    return -ENOMEM;
+  }
+
+  ret = glfs_get_volfile(glfs, volfile, len);
+  if (ret <= 0 || (size_t)ret > len) {
+    GB_FREE(volfile);
+    return ret < 0 ? -EAGAIN : -EIO;
+  }
+  volfile[ret] = '\0';
+
+  for (line = strtok_r(volfile, "\n", &tokSave); line;
+       line = strtok_r(NULL, "\n", &tokSave)) {
+    if (sscanf(line, " type %127s", type) == 1 &&
+        !strcmp(type, "cluster/disperse")) {
+      found = 1;
+      break;
+    }
+  }
+
+  GB_FREE(volfile);
+  return found;
+}
+
+
 /* not cached, the caller owns it and releases it with glfs_fini() */
 struct glfs *
 glusterBlockVolumeInitPrivate(char *volume, int *errCode, char **errMsg)

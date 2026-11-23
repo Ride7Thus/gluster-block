@@ -967,10 +967,11 @@ blockCreateCliRun(blockCreateCli *blk)
   LOG("mgmt", GB_LOG_INFO,
       "create cli request, volume=%s blockname=%s mpath=%d blockhosts=%s "
       "authmode=%d size=%lu rbsize=%d blksize=%d io_timeout=%d "
-      "prealloc=%d zerofill=%d async=%d",
+      "prealloc=%d zerofill=%d async=%d thin_confirmed=%d",
       blk->volume, blk->block_name, blk->mpath, blk->block_hosts,
       blk->auth_mode, blk->size, blk->rb_size, blk->blk_size,
-      blk->io_timeout, blk->prealloc, blk->zerofill, blk->async);
+      blk->io_timeout, blk->prealloc, blk->zerofill, blk->async,
+      blk->thin_confirmed);
 
   if (GB_ALLOC(reply) < 0) {
     goto optfail;
@@ -1016,6 +1017,32 @@ blockCreateCliRun(blockCreateCli *blk)
         "glusterBlockVolumeInit(%s) for block %s with hosts %s failed",
         blk->volume, blk->block_name, blk->block_hosts);
     goto optfail;
+  }
+
+  /*
+   * A thin file on a dispersed volume allocates whole stripes on the fly
+   * with read-modify-write, which races with concurrent I/O and with
+   * UNMAP/WRITE SAME from the initiator. Ask the user to confirm.
+   */
+  if (!blk->prealloc && !strlen(blk->storage) && !blk->thin_confirmed) {
+    int disp = glusterBlockVolumeIsDispersed(glfs);
+
+    if (disp > 0) {
+      LOG("mgmt", GB_LOG_WARNING, "thin block %s requested on dispersed "
+          "volume %s, asking for confirmation", blk->block_name, blk->volume);
+      errCode = GB_CONFIRM_REQUIRED;
+      GB_ASPRINTF(&errMsg, "WARNING: volume %s is a dispersed (erasure coded) "
+                  "volume.\nA thin provisioned block file ('prealloc no') "
+                  "allocates space on the fly on such a volume, which can "
+                  "race with concurrent writes and UNMAP/WRITE SAME from the "
+                  "initiator and lead to I/O errors or inconsistent data.\n"
+                  "Use 'prealloc full' for blocks on dispersed volumes.",
+                  blk->volume);
+      goto optfail;
+    } else if (disp < 0) {
+      LOG("mgmt", GB_LOG_WARNING, "could not detect the type of volume %s "
+          "[%s]", blk->volume, strerror(-disp));
+    }
   }
 
   lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);

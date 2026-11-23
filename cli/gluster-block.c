@@ -14,6 +14,7 @@
 # include  "config.h"
 
 # include <arpa/inet.h>
+# include <strings.h>
 # include <unistd.h>
 
 # define  GB_CREATE_HELP_STR  "gluster-block create <volname/blockname> "      \
@@ -54,6 +55,7 @@ extern const char *argp_program_version;
 struct timeval TIMEOUT;           /* cli process to daemon cli thread timeout */
 static size_t cliOptTimeout;
 static bool cliOptWait;           /* wait for background operations to finish */
+static bool cliOptYes;            /* answer yes to confirmations */
 
 gbProcessCtx gbCtx = GB_CLI_MODE; /* set process mode */
 
@@ -105,6 +107,37 @@ glusterBlockCLILoadConfig(void)
 }
 
 
+/*
+ * The daemon asks to confirm a risky request (exit GB_CONFIRM_REQUIRED).
+ * Ask on a terminal, refuse otherwise.
+ */
+static bool
+glusterBlockCliConfirm(const char *out, int json)
+{
+  char answer[16] = {0, };
+  char *msg = NULL;
+  char *end;
+
+  if (json || !isatty(STDIN_FILENO)) {
+    return false;
+  }
+
+  /* drop the trailing RESULT:FAIL of the error response */
+  if (out && (msg = strdup(out)) && (end = strstr(msg, "\nRESULT:FAIL"))) {
+    *end = '\0';
+  }
+  MSG(stderr, "%s", msg ? msg : (out ? out : ""));
+  free(msg);
+
+  fprintf(stderr, "Do you want to continue anyway? (y/N): ");
+  fflush(stderr);
+  if (!fgets(answer, sizeof(answer), stdin)) {
+    return false;
+  }
+  return !strcasecmp(answer, "y\n") || !strcasecmp(answer, "yes\n");
+}
+
+
 static int
 glusterBlockCliRPC_1(void *cobj, clioperations opt)
 {
@@ -126,6 +159,7 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   blockResponse reply = {0,};
   blockResponse wait_reply;
   enum clnt_stat wait_stat;
+  bool confirmHint = false;
   char          errMsg[2048] = {0};
   gbConfig *conf = NULL;
   char *cli_timeout;
@@ -191,12 +225,36 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   switch(opt) {
   case CREATE_CLI:
     create_obj = cobj;
+    if (cliOptYes) {
+      create_obj->thin_confirmed = true;
+    }
+ create_again:
     if (block_create_cli_1(create_obj, &reply, clnt) != RPC_SUCCESS) {
       LOG("cli", GB_LOG_ERROR,
           "%s block %s create on volume %s with hosts %s failed",
           clnt_sperror(clnt, "block_create_cli_1"), create_obj->block_name,
           create_obj->volume, create_obj->block_hosts);
       goto out;
+    }
+    if (reply.exit == GB_CONFIRM_REQUIRED && !create_obj->thin_confirmed) {
+      if (glusterBlockCliConfirm(reply.out, create_obj->json_resp)) {
+        LOG("cli", GB_LOG_INFO, "user confirmed thin block %s/%s on a "
+            "dispersed volume", create_obj->volume, create_obj->block_name);
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+        memset(&reply, 0, sizeof(reply));
+        create_obj->thin_confirmed = true;
+        goto create_again;
+      }
+      if (!create_obj->json_resp && isatty(STDIN_FILENO)) {
+        /* the user said no, the warning was already shown */
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+        memset(&reply, 0, sizeof(reply));
+        snprintf(errMsg, sizeof(errMsg), "create of %s/%s cancelled",
+                 create_obj->volume, create_obj->block_name);
+        ret = GB_CONFIRM_REQUIRED;
+        goto out;
+      }
+      confirmHint = true;
     }
     break;
   case DELETE_CLI:
@@ -332,6 +390,11 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
     ret = -1;
   }
 
+  if (confirmHint) {
+    MSG(stderr, "hint: run 'gluster-block --yes create ...' to create it "
+        "anyway");
+  }
+
   if (clnt) {
     if (reply.out && !clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse,
                                    (char *)&reply)) {
@@ -360,7 +423,7 @@ glusterBlockHelp(void)
   MSG(stdout,
       PACKAGE_NAME" ("PACKAGE_VERSION")\n"
       "usage:\n"
-      "  gluster-block [timeout <seconds>] [--wait] <command> <volname[/blockname]> [<args>] [--json*]\n"
+      "  gluster-block [timeout <seconds>] [--wait] [--yes] <command> <volname[/blockname]> [<args>] [--json*]\n"
       "\n"
       "  create and modify size return as soon as the request is accepted\n"
       "  (RESULT: IN-PROGRESS) and finish in background, use 'status' to\n"
@@ -420,6 +483,9 @@ glusterBlockHelp(void)
       "  --wait\n"
       "        wait until a background create or modify size finishes and print\n"
       "        its result. [default: return RESULT: IN-PROGRESS at once]\n"
+      "  --yes\n"
+      "        do not ask for confirmation, e.g. 'prealloc no' on a dispersed\n"
+      "        volume.\n"
       "  --json*\n"
       "        used to request the output result in json format [default: plain text]\n"
       "        supported JSON formats: --json|--json-plain|--json-spaced|--json-pretty\n"
@@ -1392,6 +1458,16 @@ main(int argc, char *argv[])
       }
       args = args - 2;
       count = count + 2;
+      continue;
+    }
+    if (opt == GB_CLI_YES) {
+      if (args <= 2) {     /* some command is manditory */
+        glusterBlockHelp();
+        goto fail;
+      }
+      cliOptYes = true;
+      args = args - 1;
+      count = count + 1;
       continue;
     }
     if (opt == GB_CLI_WAIT) {
