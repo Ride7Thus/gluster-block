@@ -77,7 +77,7 @@ details about block device.
 
 .SS
 \fBstatus\fR <VOLNAME> [<OPERATION-ID>]
-current or last long running operation (create, modify size) on the volume: operation id, block, node running it, phase, allocation progress, start time and result. STATE INTERRUPTED means the daemon running it stopped before it finished.
+current or last long running operation (create, modify size) on the volume: operation id, block, node running it, phase, allocation progress, start time and result. While space is allocated or zero filled, PHASE names the step and its progress, e.g. "allocating storage (zero filling, 42%)", PROGRESS shows the bytes done and FINISHED the estimated end time with the time left. STATE INTERRUPTED means the daemon running it stopped before it finished.
 .TP
 [<OPERATION-ID>]
 print the result of that operation, as the command itself would have printed it, exit code 115 (EINPROGRESS) while it is still running. Results are stored on the volume in /block-ops for a day, so this works from every node.

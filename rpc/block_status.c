@@ -49,6 +49,8 @@
 # define  GB_LOCK_RETRY_USEC    200000
 # define  GB_ASYNC_KEEP_SEC     86400       /* keep finished results a day */
 # define  GB_ASYNC_KEEP_MAX     64
+# define  GB_PROGRESS_SYNC_SEC  2           /* how often progress is stored */
+# define  GB_ETA_MIN_SEC        5           /* measure this long before ETA */
 # define  GB_OPSDIR             "/block-ops"  /* results, shared by all nodes */
 # define  GB_OPRESULT_MAX       1048576
 # define  GB_OPRESULT_GRACE     60          /* finished, result being stored */
@@ -74,6 +76,14 @@ typedef struct gbOpStatus {
   long long  finished;
   int        errCode;
   char       msg[1024];
+
+  /* measurable step inside the phase: allocating space, zero filling */
+  char       step[64];
+  long long  stepStarted;
+  size_t     stepTotal;    /* bytes the step has to process */
+  size_t     stepDone;     /* processed, written by the operation */
+  int        stepByAlloc;  /* done = st_blocks of the file - stepBase */
+  size_t     stepBase;     /* allocated bytes when the step started */
 } gbOpStatus;
 
 
@@ -146,10 +156,14 @@ gbOpStatusSerialize(const gbOpStatus *st, char *buf, size_t len)
   return snprintf(buf, len,
                   "STATE: %s\nOPERATION: %s\nID: %s\nBLOCK: %s\nGBID: %s\n"
                   "NODE: %s\nPHASE: %s\nASYNC: %d\nSIZE: %zu\nSTARTED: %lld\n"
-                  "UPDATED: %lld\nFINISHED: %lld\nERRCODE: %d\nMSG: %s\n",
+                  "UPDATED: %lld\nFINISHED: %lld\nERRCODE: %d\nMSG: %s\n"
+                  "STEP: %s\nSTEP-STARTED: %lld\nSTEP-TOTAL: %zu\n"
+                  "STEP-DONE: %zu\nSTEP-BYALLOC: %d\nSTEP-BASE: %zu\n",
                   st->state, st->op, st->id, st->block, st->gbid, st->node,
                   st->phase, st->async, st->size, st->started, st->updated,
-                  st->finished, st->errCode, st->msg);
+                  st->finished, st->errCode, st->msg, st->step,
+                  st->stepStarted, st->stepTotal, st->stepDone,
+                  st->stepByAlloc, st->stepBase);
 }
 
 
@@ -198,6 +212,18 @@ gbOpStatusParse(char *buf, gbOpStatus *st)
       sscanf(val, "%d", &st->errCode);
     } else if (!strcmp(line, "MSG")) {
       GB_STRCPYSTATIC(st->msg, val);
+    } else if (!strcmp(line, "STEP")) {
+      GB_STRCPYSTATIC(st->step, val);
+    } else if (!strcmp(line, "STEP-STARTED")) {
+      sscanf(val, "%lld", &st->stepStarted);
+    } else if (!strcmp(line, "STEP-TOTAL")) {
+      sscanf(val, "%zu", &st->stepTotal);
+    } else if (!strcmp(line, "STEP-DONE")) {
+      sscanf(val, "%zu", &st->stepDone);
+    } else if (!strcmp(line, "STEP-BYALLOC")) {
+      sscanf(val, "%d", &st->stepByAlloc);
+    } else if (!strcmp(line, "STEP-BASE")) {
+      sscanf(val, "%zu", &st->stepBase);
     }
   }
 }
@@ -292,9 +318,52 @@ blockOpPhase(const char *phase)
     return;
   }
   GB_STRCPYSTATIC(gbCurOp->st.phase, phase);
+  gbCurOp->st.step[0] = '\0';
   gbOpStatusWrite(gbCurOp->lkfd, &gbCurOp->st);
   LOG("mgmt", GB_LOG_INFO, "%s of block %s: %s", gbCurOp->st.op,
       gbCurOp->st.block, phase);
+}
+
+
+/*
+ * Start a step of @total bytes. With @byAlloc the progress is read from the
+ * allocated size of the backing file (fallocate reports nothing while it
+ * runs), @base is what was allocated before; else the operation reports it
+ * with blockOpStepProgress().
+ */
+void
+blockOpStep(const char *step, size_t total, bool byAlloc, size_t base)
+{
+  if (!gbCurOp) {
+    return;
+  }
+  GB_STRCPYSTATIC(gbCurOp->st.step, step);
+  gbCurOp->st.stepStarted = time(NULL);
+  gbCurOp->st.stepTotal = total;
+  gbCurOp->st.stepDone = 0;
+  gbCurOp->st.stepByAlloc = byAlloc;
+  gbCurOp->st.stepBase = base;
+  gbOpStatusWrite(gbCurOp->lkfd, &gbCurOp->st);
+  LOG("mgmt", GB_LOG_INFO, "%s of block %s: %s %zu bytes", gbCurOp->st.op,
+      gbCurOp->st.block, step, total);
+}
+
+
+/* bytes done in the current step, stored every GB_PROGRESS_SYNC_SEC */
+void
+blockOpStepProgress(size_t done)
+{
+  time_t now;
+
+  if (!gbCurOp || !gbCurOp->st.step[0]) {
+    return;
+  }
+  gbCurOp->st.stepDone = done;
+  now = time(NULL);
+  if (now - gbCurOp->st.updated >= GB_PROGRESS_SYNC_SEC ||
+      done >= gbCurOp->st.stepTotal) {
+    gbOpStatusWrite(gbCurOp->lkfd, &gbCurOp->st);
+  }
 }
 
 
@@ -309,6 +378,7 @@ blockOpEnd(struct glfs_fd *lkfd, int errCode, const char *errMsg)
   GB_STRCPYSTATIC(gbCurOp->st.state,
                   errCode ? GB_OPSTATE_FAIL : GB_OPSTATE_SUCCESS);
   GB_STRCPYSTATIC(gbCurOp->st.phase, "done");
+  gbCurOp->st.step[0] = '\0';
   gbCurOp->st.errCode = errCode < 0 ? GB_DEFAULT_ERRCODE : errCode;
   gbCopyOneLine(gbCurOp->st.msg, errCode ? errMsg : NULL,
                 sizeof(gbCurOp->st.msg));
@@ -746,9 +816,8 @@ gbAsyncAcceptedResponse(gbAsyncOp *op, int json)
   } else {
     GB_ASPRINTF(&reply->out,
                 "OPERATION-ID: %s\nOPERATION: %s\nNAME: %s\nVOLUME: %s\n"
-                "RESULT: %s\nhint: run 'gluster-block status %s' to track the "
-                "progress\n", op->id, op->op, op->block, op->volume,
-                GB_OPSTATE_RUNNING, op->volume);
+                "RESULT: %s\n", op->id, op->op, op->block, op->volume,
+                GB_OPSTATE_RUNNING);
   }
 
   /* the id for 'gluster-block --wait', NUL terminated */
@@ -1006,11 +1075,16 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
   struct glfs_fd *lkfd = NULL;
   struct stat sb;
   char path[PATH_MAX];
-  char started[64], updated[64], finished[64], elapsed[64];
+  char started[64], updated[64], finished[192], elapsed[64];
   char *allocated = NULL, *total = NULL, *progress = NULL;
+  char *stepDoneStr = NULL, *stepTotalStr = NULL, *stepProgress = NULL;
+  char phaseText[256], remaining[64];
   char *errMsg = NULL;
   int errCode = 0;
-  bool have = false, stale = false;
+  bool have = false, stale = false, haveUsed = false;
+  size_t used = 0, stepDone = 0;
+  int stepPct = -1;
+  long long now = time(NULL), etaTime = 0, left = -1, stepElapsed;
   gbOpStatus st;
   const char *state, *volstate;
   json_object *json_obj = NULL;
@@ -1051,14 +1125,57 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
     if (!strcmp(volstate, "BUSY") && st.gbid[0] && st.size) {
       snprintf(path, sizeof(path), "%s/%s", GB_STOREDIR, st.gbid);
       if (!glfs_stat(glfs, path, &sb)) {
-        size_t used = (size_t)sb.st_blocks * 512;
+        haveUsed = true;
+        used = (size_t)sb.st_blocks * 512;
         if (used > st.size) {
           used = st.size;
         }
         allocated = glusterBlockFormatSize("mgmt", used);
         total = glusterBlockFormatSize("mgmt", st.size);
-        GB_ASPRINTF(&progress, "%s of %s (%zu%%)", allocated ? allocated : "-",
-                    total ? total : "-", (size_t)(used * 100.0 / st.size));
+        GB_ASPRINTF(&progress, "%s of %s (%d%%)", allocated ? allocated : "-",
+                    total ? total : "-", (int)(used * 100.0 / st.size));
+      }
+    }
+
+    /* progress and remaining time of the current step */
+    snprintf(phaseText, sizeof(phaseText), "%s", st.phase);
+    if (!strcmp(volstate, "BUSY")) {
+      if (st.step[0] && st.stepTotal) {
+        if (st.stepByAlloc) {
+          stepDone = haveUsed && used > st.stepBase ? used - st.stepBase : 0;
+        } else {
+          stepDone = st.stepDone;
+        }
+        if (stepDone > st.stepTotal) {
+          stepDone = st.stepTotal;
+        }
+        stepPct = (int)(stepDone * 100.0 / st.stepTotal);
+        stepElapsed = now - st.stepStarted;
+        if (stepDone && stepElapsed >= GB_ETA_MIN_SEC) {
+          left = (long long)((double)(st.stepTotal - stepDone) * stepElapsed /
+                             stepDone);
+          etaTime = now + left;
+        }
+        snprintf(phaseText, sizeof(phaseText), "%s (%s, %d%%)", st.phase,
+                 st.step, stepPct);
+
+        stepDoneStr = glusterBlockFormatSize("mgmt", stepDone);
+        stepTotalStr = glusterBlockFormatSize("mgmt", st.stepTotal);
+        GB_ASPRINTF(&stepProgress, "%s of %s (%d%%)",
+                    stepDoneStr ? stepDoneStr : "-",
+                    stepTotalStr ? stepTotalStr : "-", stepPct);
+      }
+
+      /* FINISHED shows the estimate while the operation runs */
+      if (etaTime) {
+        char when[64];
+
+        gbFormatTime(etaTime, when, sizeof(when));
+        gbFormatDuration(left, remaining, sizeof(remaining));
+        snprintf(finished, sizeof(finished), "~ %s (%s left)", when,
+                 remaining);
+      } else if (st.step[0]) {
+        snprintf(finished, sizeof(finished), "- (estimating)");
       }
     }
   } else {
@@ -1084,6 +1201,18 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
       if (progress) {
         json_object_object_add(o, "ALLOCATED", GB_JSON_OBJ_TO_STR(progress));
       }
+      if (stepPct >= 0) {
+        json_object_object_add(o, "STEP", json_object_new_string(st.step));
+        json_object_object_add(o, "STEP-DONE", json_object_new_int64(stepDone));
+        json_object_object_add(o, "STEP-TOTAL",
+                               json_object_new_int64(st.stepTotal));
+        json_object_object_add(o, "STEP-PERCENT", json_object_new_int(stepPct));
+      }
+      if (etaTime) {
+        json_object_object_add(o, "ESTIMATED-FINISH",
+                               json_object_new_int64(etaTime));
+        json_object_object_add(o, "REMAINING-SEC", json_object_new_int64(left));
+      }
       json_object_object_add(o, "STARTED", json_object_new_int64(st.started));
       json_object_object_add(o, "UPDATED", json_object_new_int64(st.updated));
       json_object_object_add(o, "FINISHED", json_object_new_int64(st.finished));
@@ -1103,13 +1232,15 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
                 "VOLUME: %s\nSTATUS: %s\n%s:\n"
                 "  OPERATION: %s\n  OPERATION-ID: %s\n  NAME: %s\n"
                 "  GBID: %s\n  NODE: %s\n  STATE: %s\n  PHASE: %s\n"
-                "%s%s%s"
+                "%s%s%s%s%s%s"
                 "  STARTED: %s\n  UPDATED: %s\n  FINISHED: %s\n"
                 "  ELAPSED: %s\n%s%s%s",
                 blk->volume, volstate,
                 strcmp(volstate, "BUSY") ? "LAST OPERATION" : "OPERATION",
                 st.op, st.id[0] ? st.id : "-", st.block,
-                st.gbid[0] ? st.gbid : "-", st.node, state, st.phase,
+                st.gbid[0] ? st.gbid : "-", st.node, state, phaseText,
+                stepProgress ? "  PROGRESS: " : "",
+                stepProgress ? stepProgress : "", stepProgress ? "\n" : "",
                 progress ? "  ALLOCATED: " : "", progress ? progress : "",
                 progress ? "\n" : "",
                 started, updated, finished, elapsed,
@@ -1134,6 +1265,9 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
   GB_FREE(allocated);
   GB_FREE(total);
   GB_FREE(progress);
+  GB_FREE(stepDoneStr);
+  GB_FREE(stepTotalStr);
+  GB_FREE(stepProgress);
   GB_FREE(errMsg);
 
   return reply;

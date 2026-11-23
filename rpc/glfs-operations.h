@@ -67,6 +67,13 @@ glusterBlockMetaLock(struct glfs_fd *lkfd, const char *volume, bool readonly,
 void
 blockOpEnd(struct glfs_fd *lkfd, int errCode, const char *errMsg);
 
+/* a measurable step of the running operation, see block_status.c */
+void
+blockOpStep(const char *step, size_t total, bool byAlloc, size_t base);
+
+void
+blockOpStepProgress(size_t done);
+
 int
 glusterBlockCreateEntry(struct glfs *glfs, blockCreateCli *blk, char *gbid,
                         int *errCode, char **errMsg);

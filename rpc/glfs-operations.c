@@ -15,6 +15,7 @@
 
 # define  GB_LB_ATTR_PREFIX  "user.block"
 # define  GB_ZEROS_BUF_SIZE  4194304  /* 4MiB */
+# define  GB_ZEROFILL_CHUNK  268435456  /* 256MiB, progress granularity */
 
 
 static struct glfs *
@@ -194,7 +195,7 @@ glusterBlockCheckAvailableSpace(struct glfs *glfs,
 }
 
 
-int
+static int
 glusterBlockZeroFill(struct glfs_fd *tgfd, off_t offset, size_t size)
 {
   struct iovec iov[4];
@@ -204,9 +205,6 @@ glusterBlockZeroFill(struct glfs_fd *tgfd, off_t offset, size_t size)
   int ret = -1;
   int i;
 
-
-  LOG("gfapi", GB_LOG_INFO,
-      "zerofill is not supported for this volume type, slow zeroing will be used");
 
   if (GB_ALLOC_N(zerodata, GB_ZEROS_BUF_SIZE) < 0) {
     LOG("gfapi", GB_LOG_ERROR, "Alloc failed");
@@ -267,31 +265,53 @@ glusterBlockTruncate(struct glfs_fd *fd, off_t size)
 #endif
 }
 
+/*
+ * Write zeros over [@off, @off + @len) in chunks, so that 'gluster-block
+ * status' can show the progress and the remaining time.
+ */
 static int
 glusterBlockZeroFillRange(struct glfs_fd *fd, off_t off, size_t len,
                           const char *gbid, const char *volume,
                           const char *name, int *errCode)
 {
-  int ret = glfs_zerofill(fd, off, len);
+  bool slow = false;
+  size_t done = 0, n;
 
-  if (ret && errno == ENOTSUP) {
-    if (glusterBlockZeroFill(fd, off, len)) {
+
+  blockOpStep("zero filling", len, false, 0);
+
+  while (done < len) {
+    n = len - done < GB_ZEROFILL_CHUNK ? len - done : GB_ZEROFILL_CHUNK;
+
+    if (!slow) {
+      if (!glfs_zerofill(fd, off + done, n)) {
+        goto next;
+      }
+      if (errno != ENOTSUP && errno != EOPNOTSUPP) {
+        *errCode = errno;
+        LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s) on volume %s "
+            "for block %s of size %zu failed [%s]",
+            gbid, volume, name, len, strerror(*errCode));
+        return -1;
+      }
+      LOG("gfapi", GB_LOG_INFO, "zerofill is not supported on volume %s, "
+          "slow zeroing will be used", volume);
+      slow = true;
+    }
+
+    if (glusterBlockZeroFill(fd, off + done, n)) {
       *errCode = errno;
       LOG("gfapi", GB_LOG_ERROR, "glusterBlockZeroFill(%s) on volume %s "
           "for block %s of size %zu failed [%s]",
           gbid, volume, name, len, strerror(*errCode));
       return -1;
     }
-    return 0;
+
+ next:
+    done += n;
+    blockOpStepProgress(done);
   }
 
-  if (ret) {
-    *errCode = errno;
-    LOG("gfapi", GB_LOG_ERROR, "glfs_zerofill(%s) on volume %s "
-        "for block %s of size %zu failed [%s]",
-        gbid, volume, name, len, strerror(*errCode));
-    return -1;
-  }
   return 0;
 }
 
@@ -337,6 +357,14 @@ glusterBlockExtend(struct glfs_fd *fd, off_t off, size_t len,
 
   if (!len) {
     return 0;
+  }
+
+  if (prealloc) {
+    /* progress of fallocate is visible in st_blocks only */
+    struct stat sb;
+
+    blockOpStep("allocating space", len, true,
+                glfs_fstat(fd, &sb) ? 0 : (size_t)sb.st_blocks * 512);
   }
 
   if (prealloc && !glfs_fallocate(fd, 0, off, len)) {
