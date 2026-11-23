@@ -1383,8 +1383,8 @@ main(int argc, char *argv[])
         goto fail;
       }
 
-      if (isNumber(argv[2])) {
-        sscanf(argv[2], "%ld", &cliOptTimeout);
+      if (isNumber(argv[count + 1])) {
+        sscanf(argv[count + 1], "%ld", &cliOptTimeout);
       } else {
         MSG(stderr, "'timeout' option is incorrect, check usage.");
         MSG(stderr, "hint: timeout argument accept only time in seconds.");
