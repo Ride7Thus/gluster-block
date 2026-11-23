@@ -7,7 +7,7 @@
 #    there are commits after it;
 #  - else (a fork without tags) the base version below in the same format.
 
-BASE_VERSION=0.5.19
+BASE_VERSION=0.5.21
 
 cd "$(dirname "$0")" || exit 1
 

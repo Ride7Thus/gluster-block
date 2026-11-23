@@ -1,3 +1,21 @@
+gluster-block release 0.5.21
+============================
+
+The patch number counts the problems solved since 0.5.1 (20).
+
+Features:
+---------
+19. 'gluster-block status' shows the step of a running create or
+    resize in PHASE, e.g. 'allocating storage (zero filling, 42%)',
+    the bytes done in PROGRESS and the estimated end time with the
+    time left in FINISHED. The IN-PROGRESS response has no hint line
+    any more.
+20. new gluster-block-selinux package with a policy module: targetclid
+    (confined on EL9) may write the configshell log in
+    /var/log/gluster-block. Before every targetcli command failed with
+    "Permission denied" when SELinux was enforcing.
+
+
 gluster-block release 0.5.19
 ============================
 
