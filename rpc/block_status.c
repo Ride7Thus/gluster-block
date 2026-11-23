@@ -37,6 +37,7 @@
 # include  "block_common.h"
 
 # include  <ctype.h>
+# include  <dirent.h>
 # include  <limits.h>
 # include  <time.h>
 # include  <unistd.h>
@@ -48,6 +49,9 @@
 # define  GB_LOCK_RETRY_USEC    200000
 # define  GB_ASYNC_KEEP_SEC     86400       /* keep finished results a day */
 # define  GB_ASYNC_KEEP_MAX     64
+# define  GB_OPSDIR             "/block-ops"  /* results, shared by all nodes */
+# define  GB_OPRESULT_MAX       1048576
+# define  GB_OPRESULT_GRACE     60          /* finished, result being stored */
 
 # define  GB_OPSTATE_RUNNING     "IN-PROGRESS"
 # define  GB_OPSTATE_SUCCESS     "SUCCESS"
@@ -517,7 +521,12 @@ gbAsyncPrune(void)
 }
 
 
-/* operation ids are uuids */
+/*
+ * Results of background operations are kept on the volume in
+ * /block-ops/<operation id>, so 'gluster-block status <volume> <id>' and
+ * --wait work from any node, also after the daemon that ran the operation
+ * was restarted. Each file is written once by its operation, no lock needed.
+ */
 static bool
 gbOpIdValid(const char *id)
 {
@@ -532,6 +541,121 @@ gbOpIdValid(const char *id)
 }
 
 
+static void
+gbOpResultPrune(struct glfs *glfs)
+{
+  struct glfs_fd *dfd;
+  struct dirent *entry;
+  struct stat sb;
+  char path[PATH_MAX];
+  time_t now = time(NULL);
+
+  dfd = glfs_opendir(glfs, GB_OPSDIR);
+  if (!dfd) {
+    return;
+  }
+  while ((entry = glfs_readdir(dfd))) {
+    if (!gbOpIdValid(entry->d_name)) {
+      continue;
+    }
+    snprintf(path, sizeof(path), "%s/%s", GB_OPSDIR, entry->d_name);
+    if (!glfs_stat(glfs, path, &sb) && now - sb.st_mtime > GB_ASYNC_KEEP_SEC &&
+        glfs_unlink(glfs, path)) {
+      LOG("mgmt", GB_LOG_WARNING, "glfs_unlink(%s) failed[%s]", path,
+          strerror(errno));
+    }
+  }
+  glfs_closedir(dfd);
+}
+
+
+static void
+gbOpResultStore(struct glfs *glfs, const char *id, int exitCode,
+                const char *out)
+{
+  struct glfs_fd *fd;
+  char path[PATH_MAX];
+  char *buf = NULL;
+  int len;
+
+  if (glfs_mkdir(glfs, GB_OPSDIR, 0700) && errno != EEXIST) {
+    LOG("mgmt", GB_LOG_WARNING, "glfs_mkdir(%s) failed[%s], result of %s "
+        "is only kept on this node", GB_OPSDIR, strerror(errno), id);
+    return;
+  }
+
+  snprintf(path, sizeof(path), "%s/%s", GB_OPSDIR, id);
+  fd = glfs_creat(glfs, path, O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
+  if (!fd) {
+    LOG("mgmt", GB_LOG_WARNING, "glfs_creat(%s) failed[%s], result is only "
+        "kept on this node", path, strerror(errno));
+    return;
+  }
+
+  len = GB_ASPRINTF(&buf, "EXIT: %d\n%s", exitCode, out ? out : "");
+  if (len > 0 && glfs_write(fd, buf, len, 0) != len) {
+    LOG("mgmt", GB_LOG_WARNING, "glfs_write(%s) failed[%s]", path,
+        strerror(errno));
+  }
+  GB_FREE(buf);
+  if (glfs_close(fd)) {
+    LOG("mgmt", GB_LOG_WARNING, "glfs_close(%s) failed[%s]", path,
+        strerror(errno));
+  }
+
+  gbOpResultPrune(glfs);
+}
+
+
+/* 0 and the stored result, or -1 if there is none */
+static int
+gbOpResultLoad(struct glfs *glfs, const char *id, int *exitCode, char **out)
+{
+  struct glfs_fd *fd;
+  struct stat sb;
+  char path[PATH_MAX];
+  char *buf = NULL, *body;
+  ssize_t ret;
+  size_t len, done = 0;
+  int rc = -1;
+
+  snprintf(path, sizeof(path), "%s/%s", GB_OPSDIR, id);
+  fd = glfs_open(glfs, path, O_RDONLY);
+  if (!fd) {
+    return -1;
+  }
+  if (glfs_fstat(fd, &sb) || sb.st_size <= 0) {
+    goto out;
+  }
+  len = sb.st_size > GB_OPRESULT_MAX ? GB_OPRESULT_MAX : sb.st_size;
+  if (GB_ALLOC_N(buf, len + 1) < 0) {
+    goto out;
+  }
+  while (done < len) {
+    ret = glfs_read(fd, buf + done, len - done, 0);
+    if (ret <= 0) {
+      break;
+    }
+    done += ret;
+  }
+  buf[done] = '\0';
+
+  if (sscanf(buf, "EXIT: %d", exitCode) != 1) {
+    goto out;
+  }
+  body = strchr(buf, '\n');
+  if (GB_STRDUP(*out, body ? body + 1 : "") < 0) {
+    goto out;
+  }
+  rc = 0;
+
+ out:
+  GB_FREE(buf);
+  glfs_close(fd);
+  return rc;
+}
+
+
 static void *
 gbAsyncWorker(void *data)
 {
@@ -542,6 +666,7 @@ gbAsyncWorker(void *data)
   void (*freeArg)(void *);
   char desc[sizeof(op->op) + sizeof(op->volume) + sizeof(op->block) +
             sizeof(op->id) + 16];
+  char id[sizeof(op->id)];
   int exitCode;
 
 
@@ -560,6 +685,7 @@ gbAsyncWorker(void *data)
   freeArg = op->freeArg;
   snprintf(desc, sizeof(desc), "%s of %s/%s (id %s)", op->op, op->volume,
            op->block, op->id);
+  GB_STRCPYSTATIC(id, op->id);
   if (released) {
     op->arg = NULL;
   }
@@ -578,6 +704,13 @@ gbAsyncWorker(void *data)
     }
     /* the RPC thread is gone, the argument copy is ours to free */
     freeArg(arg);
+
+    /* the id was handed out, publish the result for the other nodes; the
+     * private glfs object of the operation is still alive */
+    if (gbPendingFini) {
+      gbOpResultStore(gbPendingFini, id, exitCode,
+                      reply ? reply->out : NULL);
+    }
   }
 
   if (gbPendingFini) {
@@ -755,8 +888,7 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply);
 
 
 /*
- * Result of one operation started by this daemon, for --wait and
- * 'status <volume> <id>'.
+ * Result of one operation, for --wait and 'status <volume> <id>'.
  * exit EINPROGRESS with the volume status while it runs, else the result
  * the operation returned (or a summary when only that is left).
  */
@@ -765,7 +897,13 @@ blockStatusOpId(blockStatusCli *blk, blockResponse *reply)
 {
   struct list_head *pos;
   gbAsyncOp *op;
+  struct glfs *glfs;
+  struct glfs_fd *lkfd;
+  char path[PATH_MAX];
+  char *errMsg = NULL;
+  int errCode = 0, exitCode;
   bool found = false, running = false;
+  gbOpStatus st;
 
 
   if (!gbOpIdValid(blk->op_id)) {
@@ -803,11 +941,51 @@ blockStatusOpId(blockStatusCli *blk, blockResponse *reply)
   }
 
   if (!found) {
-    reply->exit = ENOENT;
-    GB_ASPRINTF(&reply->out, "operation %s is not known by this node, "
-                "results are kept for %d hours on the node that ran it\n",
-                blk->op_id, GB_ASYNC_KEEP_SEC / 3600);
-    return reply;
+    /* started on another node, or before a restart of this daemon */
+    glfs = glusterBlockVolumeInit(blk->volume, &errCode, &errMsg);
+    if (!glfs) {
+      blockFormatErrorResponse(STATUS_SRV, blk->json_resp,
+                               errCode ? errCode : GB_DEFAULT_ERRCODE,
+                               errMsg ? errMsg : GB_DEFAULT_ERRMSG, reply);
+      GB_FREE(errMsg);
+      return reply;
+    }
+
+    if (!gbOpResultLoad(glfs, blk->op_id, &exitCode, &reply->out)) {
+      reply->exit = exitCode;
+      return reply;
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", GB_METADIR, GB_TXLOCKFILE);
+    lkfd = glfs_open(glfs, path, O_RDWR);
+    if (lkfd && !gbOpStatusReadFd(lkfd, &st) && !strcmp(st.id, blk->op_id)) {
+      if (gbOpStatusRunning(&st)) {
+        if (gbMetaLockHeld(lkfd)) {
+          running = true;
+        } else {
+          reply->exit = GB_DEFAULT_ERRCODE;
+          GB_ASPRINTF(&reply->out, "%s of %s/%s was interrupted: "
+                      "gluster-blockd on %s stopped before it finished, check "
+                      "the block with 'gluster-block info'\nRESULT:FAIL\n",
+                      st.op, blk->volume, st.block, st.node);
+        }
+      } else if (time(NULL) - st.finished < GB_OPRESULT_GRACE) {
+        running = true;   /* finished, the result is being stored */
+      } else {
+        reply->exit = st.errCode;
+        GB_ASPRINTF(&reply->out, "%s%s%s of %s/%s: RESULT: %s\n",
+                    st.msg, st.msg[0] ? "\n" : "", st.op, blk->volume,
+                    st.block, st.state);
+      }
+    } else {
+      reply->exit = ENOENT;
+      GB_ASPRINTF(&reply->out, "operation %s is not known on volume %s, "
+                  "results are kept for %d hours\n", blk->op_id, blk->volume,
+                  GB_ASYNC_KEEP_SEC / 3600);
+    }
+    if (lkfd) {
+      glfs_close(lkfd);
+    }
   }
 
   if (running) {
