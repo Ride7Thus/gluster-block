@@ -689,9 +689,10 @@ main (int argc, char **argv)
   }
 
  out:
-  finiGbConfig();
-
+  /* logs through gbConf, release it last */
   glusterBlockCleanGlobals();
+
+  finiGbConfig();
   exit (EXIT_FAILURE);
   /* NOTREACHED */
 }
