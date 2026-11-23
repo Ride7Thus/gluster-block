@@ -1,0 +1,33 @@
+policy_module(gluster_block, 1.0.0)
+
+########################################
+#
+# Declarations
+#
+
+# configshell log of the targetcli commands of gluster-blockd,
+# /var/log/gluster-block/gluster-block-configshell.log
+type gluster_block_tgcli_log_t;
+logging_log_file(gluster_block_tgcli_log_t)
+
+########################################
+#
+# targetclid
+#
+# gluster-blockd sends its targetcli commands to targetclid, which writes
+# the configshell log set with 'targetcli set global logfile=...'. The
+# targetclid_t domain may not open var_log_t files, every command failed
+# with "[Errno 13] Permission denied".
+#
+
+optional_policy(`
+	gen_require(`
+		type targetclid_t;
+	')
+
+	logging_search_logs(targetclid_t)
+	logging_log_filetrans(targetclid_t, gluster_block_tgcli_log_t, file, "gluster-block-configshell.log")
+	create_files_pattern(targetclid_t, var_log_t, gluster_block_tgcli_log_t)
+	append_files_pattern(targetclid_t, var_log_t, gluster_block_tgcli_log_t)
+	allow targetclid_t gluster_block_tgcli_log_t:file { read_file_perms setattr };
+')

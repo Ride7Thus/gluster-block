@@ -45,3 +45,8 @@ rpc/rpcl/block_xdr.c
 tests/gfapi-test
 
 .vagrant
+
+# SELinux policy module build
+selinux/tmp/
+selinux/*.pp
+selinux/*.pp.bz2

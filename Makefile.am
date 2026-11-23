@@ -9,7 +9,9 @@ noinst_HEADERS = version.h config.h
 CLEANFILES = *~ gluster-block.spec
 
 EXTRA_DIST = autogen.sh version-gen.sh README.md COPYING-GPLV2 COPYING-LGPLV3 \
-						 gluster-block.spec INSTALL NEWS
+						 gluster-block.spec INSTALL NEWS \
+						 selinux/gluster_block.te selinux/gluster_block.fc \
+						 selinux/gluster_block.if
 
 if USE_SYSTEMD
 RPM_WITH_FLAGS = --with systemd

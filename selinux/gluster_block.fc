@@ -1,0 +1,1 @@
+/var/log/gluster-block/gluster-block-configshell\.log.*	--	gen_context(system_u:object_r:gluster_block_tgcli_log_t,s0)

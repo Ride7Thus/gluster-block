@@ -28,6 +28,11 @@ SIG Gluster repository) and build the RPMs
 # dnf install build/rpmbuild/RPMS/*/gluster-block-*.rpm
 </pre>
 
+With SELinux enforcing install `gluster-block-selinux` too (pulled in
+automatically when selinux-policy-targeted is installed): targetclid, which
+runs the targetcli commands of gluster-blockd, is confined and may not write
+the configshell log in /var/log/gluster-block without it.
+
 CI builds the packages for every supported distribution: GitHub Actions
 (`.github/workflows/rpm-build.yml`) and GitLab CI (`.gitlab-ci.yml`, runners
 tagged `common`). In GitLab the packages are in the artifacts of the
