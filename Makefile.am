@@ -8,7 +8,7 @@ noinst_HEADERS = version.h config.h
 
 CLEANFILES = *~ gluster-block.spec
 
-EXTRA_DIST = autogen.sh README.md COPYING-GPLV2 COPYING-LGPLV3 \
+EXTRA_DIST = autogen.sh version-gen.sh README.md COPYING-GPLV2 COPYING-LGPLV3 \
 						 gluster-block.spec INSTALL NEWS
 
 if USE_SYSTEMD
@@ -20,7 +20,7 @@ endif
 rpms: prep
 	rpmbuild --define '_topdir $(abs_top_builddir)/build/rpmbuild' \
 		--define '_sourcedir $(abs_top_builddir)' \
-		$(RPM_WITH_FLAGS) \
+		$(RPM_WITH_FLAGS) $(RPMBUILD_ARGS) \
 		-ba gluster-block.spec
 
 srpm: prep
@@ -55,4 +55,4 @@ gen-ChangeLog:
 	(cd $(srcdir) && git diff && echo ===== git log ==== && git log) > $(distdir)/ChangeLog
 
 gen-VERSION:
-	(cd $(srcdir) && git describe --always --tags | cut -f2 -d'v' | cut -f1 -d'-') > $(distdir)/VERSION
+	$(srcdir)/version-gen.sh > $(distdir)/VERSION

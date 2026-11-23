@@ -1,0 +1,70 @@
+name: RPM build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ created ]
+
+jobs:
+  build-rpms:
+    name: ${{ matrix.distribution }}
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distribution: rocky-8
+            image: rockylinux:8
+          - distribution: rocky-9
+            image: rockylinux:9
+          - distribution: alma-8
+            image: almalinux:8
+          - distribution: alma-9
+            image: almalinux:9
+          # CentOS Stream 8 is end of life, centos:streamN images are not
+          # published on Docker Hub.
+          - distribution: centos-stream-9
+            image: quay.io/centos/centos:stream9
+
+    steps:
+      # git must be present before checkout, otherwise actions/checkout
+      # downloads a tarball without .git and the version cannot be computed.
+      - name: Install git
+        run: dnf install -y git
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # full history for the commit count in the package version
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: sh extras/install_deps.sh
+
+      - name: Build
+        run: |
+          # the workspace is owned by the runner user, not by root in the
+          # container
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ./autogen.sh
+          ./configure CFLAGS="-O2 -g -Wall -Werror -Wno-unused-but-set-variable"
+          make -j"$(nproc)"
+          make distclean
+
+      - name: Build RPMs
+        run: extras/make_rpms.sh
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.distribution }}
+          path: |
+            build/rpmbuild/RPMS/**/*.rpm
+            build/rpmbuild/SRPMS/**/*.rpm
+          if-no-files-found: error

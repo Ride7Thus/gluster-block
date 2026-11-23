@@ -17,10 +17,29 @@ Thank you for your understanding.
 
 ### Install
 ------
+<b>EL8 / EL9</b> (CentOS Stream 9, Rocky Linux 8/9, AlmaLinux 8/9): install the
+build dependencies (enables PowerTools/CRB, EPEL and, on EL9, the CentOS Storage
+SIG Gluster repository) and build the RPMs
 <pre>
-# git clone https://github.com/gluster/gluster-block.git
+# git clone https://github.com/Ride7Thus/gluster-block.git
 # cd gluster-block/
+# extras/install_deps.sh
+# extras/make_rpms.sh
+# dnf install build/rpmbuild/RPMS/*/gluster-block-*.rpm
+</pre>
 
+CI builds the packages for every supported distribution: GitHub Actions
+(`.github/workflows/rpm-build.yml`) and GitLab CI (`.gitlab-ci.yml`, runners
+tagged `common`). In GitLab the packages are in the artifacts of the
+`rpm:<distro>` jobs under `rpms/<distro>/`, the `rpm:all` job has all of them.
+
+Or build from source
+<pre>
+# ./autogen.sh && ./configure && make -j install
+</pre>
+
+<b>Older releases</b>
+<pre>
 # dnf install gcc autoconf automake make file libtool libuuid-devel json-c-devel glusterfs-api-devel glusterfs-server tcmu-runner targetcli
 
 On Fedora27 and Centos7 [Which use legacy glibc RPC], pass '--enable-tirpc=no' flag at configure time

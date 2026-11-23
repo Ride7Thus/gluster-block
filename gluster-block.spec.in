@@ -19,26 +19,36 @@
 Summary:          Gluster block storage utility
 Name:             @PACKAGE_NAME@
 Version:          @PACKAGE_VERSION@
-Release:          @PACKAGE_RELEASE@
+Release:          @PACKAGE_RELEASE@%{?dist}
 License:          GPLv2 or LGPLv3+
 URL:              https://github.com/gluster/gluster-block
 Source0:          @PACKAGE_NAME@-@PACKAGE_VERSION@.tar.gz
 
+BuildRequires:    gcc
+BuildRequires:    make
 BuildRequires:    pkgconfig(glusterfs-api)
 BuildRequires:    pkgconfig(json-c)
-BuildRequires:    help2man >= 1.36
-%if ( 0%{?_disable_tirpc:0} ) 
+BuildRequires:    pkgconfig(uuid)
+%if ! 0%{?_disable_tirpc:1}
 BuildRequires:    pkgconfig(libtirpc)
 BuildRequires:    rpcgen
 %endif
 %if ( 0%{?_with_systemd:1} )
 %{?systemd_requires}
+%if ( 0%{?fedora} ) || ( 0%{?rhel} && 0%{?rhel} >= 9 )
+BuildRequires:    systemd-rpm-macros
+%else
 BuildRequires:    systemd
+%endif
 %endif
 
 Requires:         tcmu-runner >= 1.1.3
 Requires:         targetcli >= 2.1.fb49
+%if ( 0%{?fedora} ) || ( 0%{?rhel} && 0%{?rhel} >= 8 )
+Requires:         python3-rtslib >= 2.1.fb69
+%else
 Requires:         python-rtslib >= 2.1.fb69
+%endif
 Requires:         rpcbind
 
 %description
@@ -102,6 +112,11 @@ rm -rf ${RPM_BUILD_ROOT}
      %attr(0644,-,-) %{_sharedstatedir}/gluster-block/gluster-block-caps.info
 
 %changelog
+* Mon Nov 23 2026 Ride7Thus
+- Build on EL8/EL9 (CentOS Stream, Rocky Linux, AlmaLinux): fix libtirpc
+  BuildRequires, require python3-rtslib, add %%{?dist} to Release
+- Add BuildRequires for gcc, make and libuuid, drop unused help2man
+
 * Tue May 14 2019 Xiubo Li <xiubli@redhat.com>
 - Fix rpmlint dangerous-command-in-preun rm warning
 

@@ -9,7 +9,7 @@ dnl  cases as published by the Free Software Foundation.
 
 AC_PREREQ([2.69])
 AC_INIT([gluster-block],
-        m4_esyscmd(echo -n $(cat VERSION 2>/dev/null || git describe --always --tags | cut -f2 -d'v' | cut -f1 -d'-')),
+        m4_esyscmd([./version-gen.sh | tr -d '\n']),
         [pkalever@redhat.com],,
         [https://github.com/gluster/gluster-block.git])
 
@@ -22,7 +22,7 @@ fi
 AC_SUBST(AM_MAKEFLAGS)
 
 AC_ARG_WITH(systemddir,
-            AC_HELP_STRING([--with-systemddir=DIR],
+            AS_HELP_STRING([--with-systemddir=DIR],
                            [systemd service files in DIR @<:@PREFIX/lib/systemd/system@:>@]),
             [systemddir=$withval],
             [systemddir='${prefix}/lib/systemd/system'])
@@ -33,21 +33,21 @@ if test -d '/usr/lib/systemd/system'; then
 fi
 
 AC_ARG_WITH(initddir,
-            AC_HELP_STRING([--with-initddir=DIR],
+            AS_HELP_STRING([--with-initddir=DIR],
                            [initd service files in DIR @<:@/etc/rc.d/init.d@:>@]),
             [initddir=$withval],
             [initddir='/etc/rc.d/init.d'])
 AC_SUBST(initddir)
 
 AC_ARG_WITH(sysconfigdir,
-            AC_HELP_STRING([--with-sysconfigdir=DIR],
+            AS_HELP_STRING([--with-sysconfigdir=DIR],
                            [system service configuration in DIR @<:@/etc/sysconfig@:>@]),
             [sysconfigdir=$withval],
             [sysconfigdir='/etc/sysconfig'])
 AC_SUBST(sysconfigdir)
 
 AC_ARG_ENABLE([tirpc],
-              AC_HELP_STRING([--enable-tirpc],
+              AS_HELP_STRING([--enable-tirpc],
                              [enable use of tirpc [default: yes]]))
 
 AM_INIT_AUTOMAKE([-Wall -Werror foreign nostdinc])
@@ -125,8 +125,14 @@ AC_CHECK_LIB([uuid], [uuid_generate], [UUID="-luuid"],
 AC_SUBST(UUID)
 AC_CHECK_LIB([pthread], [pthread_mutex_init],[PTHREAD="-lpthread"],
              AC_MSG_ERROR([Posix threads library is required to build gluster-block]))
-AC_CHECK_LIB([gfapi], [glfs_fallocate], [], [AC_MSG_ERROR([glfs_fallocate not found])])
 AC_SUBST(PTHREAD)
+
+# check against gfapi only, AC_CHECK_LIB would add -lgfapi to every binary
+gb_save_LIBS="$LIBS"
+LIBS="$GFAPI_LIBS $LIBS"
+AC_CHECK_FUNC([glfs_fallocate], [],
+              [AC_MSG_ERROR([glfs_fallocate() not found in gfapi library])])
+LIBS="$gb_save_LIBS"
 
 # Dirty hacky stuff to make STATEDIR work
 if test "x$prefix" = xNONE; then
