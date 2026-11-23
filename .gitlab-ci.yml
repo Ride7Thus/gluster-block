@@ -1,0 +1,91 @@
+# Build gluster-block RPMs for EL8/EL9.
+#
+# Every rpm:<distro> job publishes its packages as an artifact under
+# rpms/<distro>/, the rpm:all job collects all of them in one archive:
+#
+#   rpms/rocky-8/gluster-block-<version>.el8.x86_64.rpm
+#   rpms/rocky-8/gluster-block-<version>.el8.src.rpm
+#   rpms/alma-9/...
+
+stages:
+  - build
+  - collect
+
+variables:
+  # full history: the package version contains the commit count
+  GIT_DEPTH: 0
+
+.rpm-build:
+  stage: build
+  tags:
+    - common
+  before_script:
+    # git is needed to compute the version and to build the source tarball
+    - dnf install -y git
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - sh extras/install_deps.sh
+  script:
+    - ./autogen.sh
+    - ./configure CFLAGS="-O2 -g -Wall -Werror -Wno-unused-but-set-variable"
+    - make -j"$(nproc)"
+    - make distclean
+    - extras/make_rpms.sh
+    - mkdir -p "rpms/$DISTRO"
+    - find build/rpmbuild/RPMS build/rpmbuild/SRPMS -name '*.rpm' -exec cp -v {} "rpms/$DISTRO/" \;
+  artifacts:
+    name: "gluster-block-$DISTRO-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - rpms/$DISTRO/
+    expire_in: 30 days
+
+rpm:rocky-8:
+  extends: .rpm-build
+  image: rockylinux:8
+  variables:
+    DISTRO: rocky-8
+
+rpm:rocky-9:
+  extends: .rpm-build
+  image: rockylinux:9
+  variables:
+    DISTRO: rocky-9
+
+rpm:alma-8:
+  extends: .rpm-build
+  image: almalinux:8
+  variables:
+    DISTRO: alma-8
+
+rpm:alma-9:
+  extends: .rpm-build
+  image: almalinux:9
+  variables:
+    DISTRO: alma-9
+
+# CentOS Stream 8 is end of life; centos:streamN images are not on Docker Hub
+rpm:centos-stream-9:
+  extends: .rpm-build
+  image: quay.io/centos/centos:stream9
+  variables:
+    DISTRO: centos-stream-9
+
+rpm:all:
+  stage: collect
+  tags:
+    - common
+  image: rockylinux:9
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - rpm:rocky-8
+    - rpm:rocky-9
+    - rpm:alma-8
+    - rpm:alma-9
+    - rpm:centos-stream-9
+  script:
+    - find rpms -name '*.rpm' | sort
+  artifacts:
+    name: "gluster-block-rpms-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - rpms/
+    expire_in: 30 days
