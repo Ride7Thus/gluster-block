@@ -301,6 +301,7 @@ glusterBlockAuditRequest(struct glfs *glfs,
     blockFreeMetaInfo(info);
     return 0;
   }
+  ret = -1;   /* not enough targets were configured, roll back */
 
  out:
   glusterBlockCleanUp(glfs, blk->block_name, FALSE, TRUE, (*reply)->obj);
