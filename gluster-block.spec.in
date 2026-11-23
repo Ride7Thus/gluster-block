@@ -46,6 +46,8 @@ Requires:         tcmu-runner >= 1.1.3
 Requires:         targetcli >= 2.1.fb49
 %if ( 0%{?fedora} ) || ( 0%{?rhel} && 0%{?rhel} >= 8 )
 Requires:         python3-rtslib >= 2.1.fb69
+# targetctl, used by gluster-block-target.service
+Requires:         target-restore
 %else
 Requires:         python-rtslib >= 2.1.fb69
 %endif

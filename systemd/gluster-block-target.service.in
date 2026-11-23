@@ -4,16 +4,28 @@
 # tcmu-runner.service is running which intern has a check to see if
 # glusterd.service is active
 #
-
-.include /usr/lib/systemd/system/target.service
+# It used to pull target.service in with '.include', which systemd no longer
+# supports (ignored since v252: "bad unit file setting"), so the settings of
+# target.service (target-restore package) are repeated here.
+#
 
 [Unit]
+Description=Restore LIO kernel target configuration for gluster-block
+Requires=sys-kernel-config.mount
+After=sys-kernel-config.mount network.target local-fs.target
 Conflicts=target.service
 Requisite=glusterd.service
 BindsTo=tcmu-runner.service
 After=glusterd.service tcmu-runner.service targetclid.service
 
 [Service]
-ExecStop=
-ExecStop=/usr/bin/ps cax | /usr/bin/grep -wq '[t]cmu-runner' && /usr/bin/targetctl clear
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/targetctl restore
+# clear only while tcmu-runner is alive, '-' ignores the failure if it is not
+ExecStop=-/bin/sh -c 'pgrep -x tcmu-runner >/dev/null && targetctl clear'
+SyslogIdentifier=gluster-block-target
 TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
