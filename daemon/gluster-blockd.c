@@ -319,6 +319,7 @@ glusterBlockDParseArgs(int count, char **options)
       if (glusterBlockSetLruCount(lruCount)) {
         return -1;
       }
+      optind++;   /* <COUNT> */
       break;
 
     case GB_DAEMON_LOG_LEVEL:
@@ -331,6 +332,7 @@ glusterBlockDParseArgs(int count, char **options)
       if (ret) {
         return ret;
       }
+      optind++;   /* <LOG-LEVEL> */
       break;
 
     case GB_DAEMON_NO_REMOTE_RPC:
@@ -338,8 +340,6 @@ glusterBlockDParseArgs(int count, char **options)
       break;
 
     }
-
-    optind++;
   }
 
   return 0;
