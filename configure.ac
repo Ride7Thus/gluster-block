@@ -132,13 +132,28 @@ AC_SUBST(JSONC_LIBS)
 
 if test "$enable_tirpc" != "no"; then
     enable_tirpc="yes";
-    AC_CHECK_HEADERS([rpc/rpc.h])
     PKG_CHECK_MODULES([TIRPC], [libtirpc >= 0.2.4],
                       [AC_DEFINE([HAVE_LIBTIRPC], [1],
                                  [Define to 1 if you have and wish to use libtirpc.])],
-                      [AC_MSG_ERROR([libtirpc is required to build gluster-block])])
+                      [AC_MSG_ERROR([libtirpc is required to build gluster-block,
+                  install libtirpc-devel (Fedora, EL) or libtirpc-dev (Debian,
+                  Ubuntu)])])
     AC_SUBST(TIRPC_CFLAGS)
     AC_SUBST(TIRPC_LIBS)
+
+    gb_save_CPPFLAGS="$CPPFLAGS"
+    CPPFLAGS="$TIRPC_CFLAGS $CPPFLAGS"
+    AC_CHECK_HEADER([rpc/rpc.h], [],
+                    [AC_MSG_ERROR([rpc/rpc.h of libtirpc not found])])
+    CPPFLAGS="$gb_save_CPPFLAGS"
+else
+    # glibc >= 2.26 does not ship Sun RPC any more (Fedora >= 28, EL >= 8,
+    # Debian >= 10, Ubuntu >= 18.04)
+    AC_CHECK_HEADER([rpc/rpc.h], [],
+                    [AC_MSG_ERROR([rpc/rpc.h not found: the C library has no
+                  Sun RPC (removed in glibc 2.26). Install libtirpc-devel
+                  (Fedora, EL) or libtirpc-dev (Debian, Ubuntu) and configure
+                  without --enable-tirpc=no])])
 fi
 
 AC_CHECK_LIB([uuid], [uuid_generate], [UUID="-luuid"],
