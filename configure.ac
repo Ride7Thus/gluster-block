@@ -21,14 +21,35 @@ if make --help 2>&1 | grep -q no-print-directory; then
 fi
 AC_SUBST(AM_MAKEFLAGS)
 
+PKG_PROG_PKG_CONFIG
+
+# Use systemd when the unit directory is given, else when the build host has
+# systemd: its pkg-config file, or a unit directory in /usr/lib (Fedora, EL,
+# merged /usr) or /lib (Debian 10, Ubuntu < 22.04). --without-systemddir
+# installs the init script instead.
 AC_ARG_WITH(systemddir,
             AS_HELP_STRING([--with-systemddir=DIR],
                            [systemd service files in DIR @<:@PREFIX/lib/systemd/system@:>@]),
             [systemddir=$withval],
-            [systemddir='${prefix}/lib/systemd/system'])
+            [systemddir='${prefix}/lib/systemd/system'; with_systemddir=auto])
+use_systemd=no
+case "$with_systemddir" in
+no)
+    systemddir='${prefix}/lib/systemd/system'
+    ;;
+auto)
+    PKG_CHECK_EXISTS([systemd], [use_systemd=yes])
+    if test -d /usr/lib/systemd/system || test -d /lib/systemd/system; then
+        use_systemd=yes
+    fi
+    ;;
+*)
+    use_systemd=yes
+    ;;
+esac
 AC_SUBST(systemddir)
-AM_CONDITIONAL([USE_SYSTEMD], test [ -d '/usr/lib/systemd/system' ])
-if test -d '/usr/lib/systemd/system'; then
+AM_CONDITIONAL([USE_SYSTEMD], [test "x$use_systemd" = "xyes"])
+if test "x$use_systemd" = "xyes"; then
     AC_DEFINE([USE_SYSTEMD], [1], [use systemd])
 fi
 
@@ -169,6 +190,11 @@ AC_FUNC_STRTOD
 AC_CHECK_FUNCS([gethostbyname memset socket strchr strdup strerror])
 AC_OUTPUT
 
+systemd_summary=$use_systemd
+if test "x$use_systemd" = "xyes"; then
+    systemd_summary="yes, units in $systemddir"
+fi
+
 cat <<EOF
 
 ------------------ Summary ------------------
@@ -177,6 +203,7 @@ cat <<EOF
   C Compiler.....: $CC $CFLAGS $CPPFLAGS
   Linker.........: $LD $LDFLAGS $LIBS
   Using Tirpc....: $enable_tirpc
+  Using systemd..: $systemd_summary
 ---------------------------------------------
 
 Check the above options and compile with:
