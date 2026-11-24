@@ -1481,7 +1481,10 @@ main(int argc, char *argv[])
       continue;
     }
 
-    json = jsonResponseFormatParse(argv[argc-1]);
+    /* the command itself is not a json option: '--help', '--version' */
+    if (count < argc - 1) {
+      json = jsonResponseFormatParse(argv[argc-1]);
+    }
     if (json == GB_JSON_MAX) {
       MSG(stderr, "expecting '--json*', got '%s'",
           argv[argc-1]);
