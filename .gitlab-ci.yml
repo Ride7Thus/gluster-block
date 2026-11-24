@@ -1,11 +1,12 @@
-# Build gluster-block RPMs for EL8/EL9.
+# Build gluster-block RPMs for EL8/EL9 and .deb packages for Debian/Ubuntu.
 #
-# Every rpm:<distro> job publishes its packages as an artifact under
-# rpms/<distro>/, the rpm:all job collects all of them in one archive:
+# Every rpm:<distro> and deb:<distro> job publishes its packages as an
+# artifact under rpms/<distro>/ or debs/<distro>/, the packages:all job
+# collects all of them in one archive:
 #
 #   rpms/rocky-8/gluster-block-<version>.el8.x86_64.rpm
 #   rpms/rocky-8/gluster-block-<version>.el8.src.rpm
-#   rpms/alma-9/...
+#   debs/ubuntu-24.04/gluster-block_<version>+ubuntu24.04_amd64.deb
 
 stages:
   - build
@@ -69,7 +70,50 @@ rpm:centos-stream-9:
   variables:
     DISTRO: centos-stream-9
 
-rpm:all:
+.deb-build:
+  stage: build
+  tags:
+    - common
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    # git is needed to compute the version
+    - apt-get update && apt-get install -y git
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - sh extras/install_deps.sh
+  script:
+    - ./autogen.sh
+    - ./configure CFLAGS="-O2 -g -Wall -Werror -Wno-unused-but-set-variable"
+    - make -j"$(nproc)"
+    - make distclean
+    - extras/make_debs.sh
+    - mkdir -p "debs/$DISTRO"
+    - cp -v build/debs/*.deb "debs/$DISTRO/"
+  artifacts:
+    name: "gluster-block-$DISTRO-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - debs/$DISTRO/
+    expire_in: 30 days
+
+deb:debian-12:
+  extends: .deb-build
+  image: debian:12
+  variables:
+    DISTRO: debian-12
+
+deb:ubuntu-22.04:
+  extends: .deb-build
+  image: ubuntu:22.04
+  variables:
+    DISTRO: ubuntu-22.04
+
+deb:ubuntu-24.04:
+  extends: .deb-build
+  image: ubuntu:24.04
+  variables:
+    DISTRO: ubuntu-24.04
+
+packages:all:
   stage: collect
   tags:
     - common
@@ -82,10 +126,14 @@ rpm:all:
     - rpm:alma-8
     - rpm:alma-9
     - rpm:centos-stream-9
+    - deb:debian-12
+    - deb:ubuntu-22.04
+    - deb:ubuntu-24.04
   script:
-    - find rpms -name '*.rpm' | sort
+    - find rpms debs -name '*.rpm' -o -name '*.deb' | sort
   artifacts:
-    name: "gluster-block-rpms-$CI_COMMIT_SHORT_SHA"
+    name: "gluster-block-packages-$CI_COMMIT_SHORT_SHA"
     paths:
       - rpms/
+      - debs/
     expire_in: 30 days

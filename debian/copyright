@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gluster-block
+Source: https://github.com/Ride7Thus/gluster-block
+
+Files: *
+Copyright: 2016-2020 Red Hat, Inc.
+License: GPL-2 or LGPL-3+
+ This file is licensed to you under your choice of the GNU Lesser General
+ Public License, version 3 or any later version (LGPLv3 or later), or the
+ GNU General Public License, version 2 (GPLv2), in all cases as published
+ by the Free Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in "/usr/share/common-licenses/GPL-2" and the GNU
+ Lesser General Public License version 3 in
+ "/usr/share/common-licenses/LGPL-3".

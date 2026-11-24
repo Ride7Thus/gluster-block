@@ -25,7 +25,15 @@ runs the targetcli commands of gluster-blockd, is confined and may not write
 the configshell log in /var/log/gluster-block without it.
 
 <b>Debian 12 / Ubuntu 22.04 / Ubuntu 24.04</b>: install the build dependencies
-and build from source
+and build the .deb packages
+<pre>
+# git clone https://github.com/Ride7Thus/gluster-block.git
+# cd gluster-block/
+# extras/install_deps.sh
+# extras/make_debs.sh
+# apt-get install ./build/debs/gluster-block_*.deb
+</pre>
+or build from source
 <pre>
 # git clone https://github.com/Ride7Thus/gluster-block.git
 # cd gluster-block/
@@ -41,9 +49,10 @@ Do not pass `--enable-tirpc=no`: the C library has no Sun RPC since glibc
 from `/etc/sysconfig/gluster-blockd` on every distribution.
 
 CI builds the packages for every supported distribution: GitHub Actions
-(`.github/workflows/rpm-build.yml`) and GitLab CI (`.gitlab-ci.yml`, runners
-tagged `common`). In GitLab the packages are in the artifacts of the
-`rpm:<distro>` jobs under `rpms/<distro>/`, the `rpm:all` job has all of them.
+(`.github/workflows/rpm-build.yml`, `.github/workflows/deb-build.yml`) and
+GitLab CI (`.gitlab-ci.yml`, runners tagged `common`). In GitLab the packages
+are in the artifacts of the `rpm:<distro>` and `deb:<distro>` jobs under
+`rpms/<distro>/` and `debs/<distro>/`, the `packages:all` job has all of them.
 
 Or build from source
 <pre>

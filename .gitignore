@@ -50,3 +50,13 @@ tests/gfapi-test
 selinux/tmp/
 selinux/*.pp
 selinux/*.pp.bz2
+
+# Debian packaging, debian/changelog is written by extras/make_debs.sh
+debian/changelog
+debian/.debhelper/
+debian/gluster-block/
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
+debian/debhelper-build-stamp

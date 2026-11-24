@@ -1,5 +1,5 @@
 EXTRA_DIST = replace-node.sh wait-for-bricks.sh upgrade_activities.sh            \
-			 make_rpms.sh install_deps.sh                                       \
+			 make_rpms.sh make_debs.sh install_deps.sh                          \
 			 gluster-block.logrotate
 
 DISTCLEANFILES = Makefile.in

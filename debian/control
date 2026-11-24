@@ -1,0 +1,33 @@
+Source: gluster-block
+Section: admin
+Priority: optional
+Maintainer: Ride7Thus <Ride7Thus@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               autoconf,
+               automake,
+               file,
+               libglusterfs-dev,
+               libjson-c-dev,
+               libtirpc-dev,
+               libtool,
+               pkgconf | pkg-config,
+               rpcsvc-proto,
+               systemd-dev | systemd,
+               uuid-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Ride7Thus/gluster-block
+Rules-Requires-Root: no
+
+Package: gluster-block
+Architecture: linux-any
+Depends: python3-rtslib-fb,
+         rpcbind,
+         targetcli-fb,
+         tcmu-runner,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Recommends: glusterfs-server
+Description: Gluster block storage utility
+ gluster-block is a CLI utility, which aims at making gluster backed block
+ storage creation and maintenance as simple as possible. It exports files on
+ a Gluster volume as iSCSI LUNs through tcmu-runner and LIO.
