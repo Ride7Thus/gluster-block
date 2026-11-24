@@ -1,3 +1,20 @@
+gluster-block release 0.5.27
+============================
+
+The patch number counts the problems solved since 0.5.1 (26).
+
+Fixes:
+------
+25. 'gluster-block --help', '--version' and '--usage' failed with
+    "expecting '--json*'".
+
+Documentation:
+--------------
+26. README: block volumes on dispersed gluster volumes need
+    'prealloc full' and 'locks.mandatory-locking optimal', otherwise
+    targetcli fails with "UserBackedStorageObject creation failed".
+
+
 gluster-block release 0.5.25
 ============================
 
@@ -22,7 +39,7 @@ Features:
     packages:all) and GitHub Actions.
 
 Known issue: 'gluster-block --help' fails with "expecting '--json*'",
-use 'gluster-block help'.
+use 'gluster-block help' (fixed in 0.5.27).
 
 
 gluster-block release 0.5.21
