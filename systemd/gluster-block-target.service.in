@@ -13,7 +13,8 @@
 Description=Restore LIO kernel target configuration for gluster-block
 Requires=sys-kernel-config.mount
 After=sys-kernel-config.mount network.target local-fs.target
-Conflicts=target.service
+# target.service is called rtslib-fb-targetctl.service on Debian and Ubuntu
+Conflicts=target.service rtslib-fb-targetctl.service
 Requisite=glusterd.service
 BindsTo=tcmu-runner.service
 After=glusterd.service tcmu-runner.service targetclid.service

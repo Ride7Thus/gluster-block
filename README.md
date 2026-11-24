@@ -24,6 +24,22 @@ automatically when selinux-policy-targeted is installed): targetclid, which
 runs the targetcli commands of gluster-blockd, is confined and may not write
 the configshell log in /var/log/gluster-block without it.
 
+<b>Debian 12 / Ubuntu 22.04 / Ubuntu 24.04</b>: install the build dependencies
+and build from source
+<pre>
+# git clone https://github.com/Ride7Thus/gluster-block.git
+# cd gluster-block/
+# extras/install_deps.sh
+# ./autogen.sh
+# ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var
+# make -j install
+# systemctl daemon-reload
+# apt-get install glusterfs-server tcmu-runner targetcli-fb python3-rtslib-fb rpcbind
+</pre>
+Do not pass `--enable-tirpc=no`: the C library has no Sun RPC since glibc
+2.26, gluster-block needs libtirpc. The settings of gluster-blockd are read
+from `/etc/sysconfig/gluster-blockd` on every distribution.
+
 CI builds the packages for every supported distribution: GitHub Actions
 (`.github/workflows/rpm-build.yml`) and GitLab CI (`.gitlab-ci.yml`, runners
 tagged `common`). In GitLab the packages are in the artifacts of the
