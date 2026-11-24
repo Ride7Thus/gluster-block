@@ -1,3 +1,30 @@
+gluster-block release 0.5.25
+============================
+
+The patch number counts the problems solved since 0.5.1 (24).
+Fixes for the issues left open in gluster/gluster-block.
+
+Fixes:
+------
+21. configure turned systemd on only when /usr/lib/systemd/system
+    existed and ignored --with-systemddir, on Debian the units were not
+    installed (gluster/gluster-block#215).
+22. --enable-tirpc=no failed late with 'rpc/rpc.h: No such file or
+    directory' on glibc >= 2.26, configure now explains it
+    (gluster/gluster-block#290).
+
+Features:
+---------
+23. build on Debian 12 and Ubuntu 22.04/24.04: install_deps.sh, README,
+    gluster-block-target.service conflicts with rtslib-fb-targetctl.
+24. .deb packages for Debian 12 and Ubuntu 22.04/24.04
+    (extras/make_debs.sh), built in GitLab CI (deb:<distro> jobs,
+    packages:all) and GitHub Actions.
+
+Known issue: 'gluster-block --help' fails with "expecting '--json*'",
+use 'gluster-block help'.
+
+
 gluster-block release 0.5.21
 ============================
 
