@@ -199,6 +199,33 @@ Preparation:
     * Read More on how to [create a gluster volume](https://gluster.readthedocs.io/en/latest/Administrator%20Guide/Setting%20Up%20Volumes/#creating-replicated-volumes).
     * We recommend replica 3 volume with group profile applied on it.
       * Helpful command: `# gluster vol set <block-hosting-volume> group gluster-block`
+    * A dispersed (erasure coded) volume works as well, see
+      [Dispersed volumes](#dispersed-volumes).
+
+##### Dispersed volumes
+
+gluster-block works on a dispersed (erasure coded) block hosting volume when
+two conditions are met:
+
+* The block file is preallocated: create it with `prealloc full` (the
+  default). A thin file (`prealloc no`) allocates whole stripes while it is
+  written and tcmu-runner fails on it, so the CLI asks for confirmation
+  (or `--yes`) before it creates one. `modify size` preallocates the added
+  space the same way.
+* Mandatory locking is enabled on the volume, without it tcmu-runner can not
+  open the block file and `targetcli` fails with
+  `UserBackedStorageObject creation failed`:
+  ```
+  # gluster vol set <block-hosting-volume> group gluster-block
+  # gluster vol set <block-hosting-volume> locks.mandatory-locking optimal
+  ```
+
+Preallocating a large block on a dispersed volume can take a long time, so
+`create` and `modify size` run in the background and return
+`RESULT: IN-PROGRESS` at once. Follow them with
+`gluster-block status <volname>`: PHASE shows the current step with its
+progress (allocating space or filling zeros) and FINISHED shows the
+estimated time left. Use `--wait` to block until the operation ends.
 
 You can execute gluster-block CLI from any of the 3 nodes where glusterd and gluster-blockd are running.
 
