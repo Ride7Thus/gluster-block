@@ -88,6 +88,7 @@
 /* Target List */
 # define  FAILED_LIST               "failed in list"
 # define  FAILED_STATUS             "failed in status"
+# define  FAILED_HOSTS              "failed in hosts"
 
 /* Target Info */
 # define  FAILED_INFO               "failed in info"
@@ -466,6 +467,7 @@ typedef enum gbCliCmdlineOption {
   GB_CLI_RELOAD,
   GB_CLI_GENCONFIG,
   GB_CLI_STATUS,
+  GB_CLI_HOSTS,
   GB_CLI_WAIT,
   GB_CLI_YES,
   GB_CLI_HELP,
@@ -490,6 +492,7 @@ static const char *const gbCliCmdlineOptLookup[] = {
   [GB_CLI_RELOAD]         = "reload",
   [GB_CLI_GENCONFIG]      = "genconfig",
   [GB_CLI_STATUS]         = "status",
+  [GB_CLI_HOSTS]          = "hosts",
   [GB_CLI_WAIT]           = "--wait",
   [GB_CLI_YES]            = "--yes",
   [GB_CLI_HELP]           = "help",

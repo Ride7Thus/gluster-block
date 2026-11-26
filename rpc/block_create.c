@@ -10,6 +10,7 @@
 
 
 # include  "block_common.h"
+# include  "block_ha.h"
 
 # define   GB_CREATE              "create"
 # define   GB_MSERVER_DELIMITER   ","
@@ -962,6 +963,7 @@ blockCreateCliRun(blockCreateCli *blk)
   struct gbXdata *xdata = NULL;
   char *cmdlog = NULL;
   bool privGlfs = false;
+  size_t i;
 
 
   LOG("mgmt", GB_LOG_INFO,
@@ -1066,6 +1068,19 @@ blockCreateCliRun(blockCreateCli *blk)
     }
     errCode = EEXIST;
     goto exist;
+  }
+
+  /* a host in maintenance takes no new blocks */
+  for (i = 0; i < list->nhosts; i++) {
+    char st[32];
+
+    if (blockHostInMaintenance(glfs, list->hosts[i], st, sizeof(st))) {
+      GB_ASPRINTF(&errMsg, "host %s is in maintenance (%s) on volume %s, "
+                  "stop it first: gluster-block hosts %s %s maintenance stop",
+                  list->hosts[i], st, blk->volume, blk->volume, list->hosts[i]);
+      errCode = EBUSY;
+      goto exist;
+    }
   }
 
   if (!resultCaps[GB_CREATE_LOAD_BALANCE_CAP]) {

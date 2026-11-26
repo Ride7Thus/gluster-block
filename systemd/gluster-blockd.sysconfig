@@ -26,5 +26,15 @@
 # default path is /var/log/gluster-block, uncomment it and set your path:
 #GB_LOG_DIR="/var/log/gluster-block"
 
+# 'hosts <volname> <host> maintenance start' moves the prio paths off the
+# host, then waits until the initiators do no more I/O through its LUNs
+# before it disables its TPGs. A LUN is idle when nothing was read or
+# written and only the multipath path checker sent commands for
+# GB_MAINT_IO_IDLE_SEC seconds; after GB_MAINT_IO_WAIT_SEC seconds without
+# that the start stops and leaves the TPGs enabled (read at start of the
+# daemon, restart it after a change)
+#GB_MAINT_IO_IDLE_SEC=10
+#GB_MAINT_IO_WAIT_SEC=120
+
 # Expert use only, just incase if we have any extra args to pass for daemon
 #GB_EXTRA_ARGS=""

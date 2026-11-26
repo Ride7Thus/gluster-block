@@ -84,6 +84,7 @@ typedef struct gbOpStatus {
   size_t     stepDone;     /* processed, written by the operation */
   int        stepByAlloc;  /* done = st_blocks of the file - stepBase */
   size_t     stepBase;     /* allocated bytes when the step started */
+  int        stepCount;    /* total and done count items, not bytes */
 } gbOpStatus;
 
 
@@ -158,12 +159,13 @@ gbOpStatusSerialize(const gbOpStatus *st, char *buf, size_t len)
                   "NODE: %s\nPHASE: %s\nASYNC: %d\nSIZE: %zu\nSTARTED: %lld\n"
                   "UPDATED: %lld\nFINISHED: %lld\nERRCODE: %d\nMSG: %s\n"
                   "STEP: %s\nSTEP-STARTED: %lld\nSTEP-TOTAL: %zu\n"
-                  "STEP-DONE: %zu\nSTEP-BYALLOC: %d\nSTEP-BASE: %zu\n",
+                  "STEP-DONE: %zu\nSTEP-BYALLOC: %d\nSTEP-BASE: %zu\n"
+                  "STEP-COUNT: %d\n",
                   st->state, st->op, st->id, st->block, st->gbid, st->node,
                   st->phase, st->async, st->size, st->started, st->updated,
                   st->finished, st->errCode, st->msg, st->step,
                   st->stepStarted, st->stepTotal, st->stepDone,
-                  st->stepByAlloc, st->stepBase);
+                  st->stepByAlloc, st->stepBase, st->stepCount);
 }
 
 
@@ -224,6 +226,8 @@ gbOpStatusParse(char *buf, gbOpStatus *st)
       sscanf(val, "%d", &st->stepByAlloc);
     } else if (!strcmp(line, "STEP-BASE")) {
       sscanf(val, "%zu", &st->stepBase);
+    } else if (!strcmp(line, "STEP-COUNT")) {
+      sscanf(val, "%d", &st->stepCount);
     }
   }
 }
@@ -343,8 +347,29 @@ blockOpStep(const char *step, size_t total, bool byAlloc, size_t base)
   gbCurOp->st.stepDone = 0;
   gbCurOp->st.stepByAlloc = byAlloc;
   gbCurOp->st.stepBase = base;
+  gbCurOp->st.stepCount = 0;
   gbOpStatusWrite(gbCurOp->lkfd, &gbCurOp->st);
   LOG("mgmt", GB_LOG_INFO, "%s of block %s: %s %zu bytes", gbCurOp->st.op,
+      gbCurOp->st.block, step, total);
+}
+
+
+/* a step of @total items (blocks), progress with blockOpStepProgress() */
+void
+blockOpStepCount(const char *step, size_t total)
+{
+  if (!gbCurOp) {
+    return;
+  }
+  GB_STRCPYSTATIC(gbCurOp->st.step, step);
+  gbCurOp->st.stepStarted = time(NULL);
+  gbCurOp->st.stepTotal = total;
+  gbCurOp->st.stepDone = 0;
+  gbCurOp->st.stepByAlloc = 0;
+  gbCurOp->st.stepBase = 0;
+  gbCurOp->st.stepCount = 1;
+  gbOpStatusWrite(gbCurOp->lkfd, &gbCurOp->st);
+  LOG("mgmt", GB_LOG_INFO, "%s of %s: %s, %zu", gbCurOp->st.op,
       gbCurOp->st.block, step, total);
 }
 
@@ -1156,11 +1181,21 @@ blockStatusVolume(blockStatusCli *blk, blockResponse *reply)
                              stepDone);
           etaTime = now + left;
         }
-        snprintf(phaseText, sizeof(phaseText), "%s (%s, %d%%)", st.phase,
-                 st.step, stepPct);
+        if (!strcmp(st.step, st.phase)) {
+          snprintf(phaseText, sizeof(phaseText), "%s (%d%%)", st.phase,
+                   stepPct);
+        } else {
+          snprintf(phaseText, sizeof(phaseText), "%s (%s, %d%%)", st.phase,
+                   st.step, stepPct);
+        }
 
-        stepDoneStr = glusterBlockFormatSize("mgmt", stepDone);
-        stepTotalStr = glusterBlockFormatSize("mgmt", st.stepTotal);
+        if (st.stepCount) {
+          GB_ASPRINTF(&stepDoneStr, "%zu", stepDone);
+          GB_ASPRINTF(&stepTotalStr, "%zu", st.stepTotal);
+        } else {
+          stepDoneStr = glusterBlockFormatSize("mgmt", stepDone);
+          stepTotalStr = glusterBlockFormatSize("mgmt", st.stepTotal);
+        }
         GB_ASPRINTF(&stepProgress, "%s of %s (%d%%)",
                     stepDoneStr ? stepDoneStr : "-",
                     stepTotalStr ? stepTotalStr : "-", stepPct);

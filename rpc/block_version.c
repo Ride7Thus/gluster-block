@@ -93,6 +93,19 @@ glusterBlockBuildMinCaps(void *data, operations opt)
       minCaps[GB_JSON_CAP] = true;
     }
     break;
+  case HOST_MAINT_SRV:
+    minCaps[GB_HOST_MAINTENANCE_CAP] = true;
+    minCaps[GB_MODIFY_PRIO_CAP] = true;
+    if (((blockHostMaintCli *)data)->json_resp) {
+      minCaps[GB_JSON_CAP] = true;
+    }
+    break;
+  case MODIFY_PRIO_SRV:
+    minCaps[GB_MODIFY_PRIO_CAP] = true;
+    if (((blockModifyPrioCli *)data)->json_resp) {
+      minCaps[GB_JSON_CAP] = true;
+    }
+    break;
   case RELOAD_SRV:
     rlblk = (blockReloadCli *)data;
 
@@ -108,6 +121,10 @@ glusterBlockBuildMinCaps(void *data, operations opt)
   case VERSION_SRV:
   case GENCONFIG_SRV:
   case STATUS_SRV:
+  case HOST_STATUS_SRV:
+  case HOSTS_SRV:
+  case REBALANCE_SRV:
+  case HOST_TPG_SRV:
     break;
   }
 

@@ -144,6 +144,27 @@ commands:
         current or last long running operation on the volume, or the
         result of the given operation (exit 115 while it runs).
 
+  hosts   <volname> [<host>]
+        state of the hosts that export the block devices of the volume:
+        gluster-blockd, tcmu-runner, loaded blocks, enabled TPGs and
+        prio paths; with <host> the state of each block on that host.
+
+  hosts   <volname> rebalance [dry-run]
+        spread the prio paths of the volume evenly over the hosts that
+        answer, moving them off hosts that do not first. Runs in
+        background, dry-run only shows the moves.
+
+  hosts   <volname> <host> maintenance start [force]
+        take the host out of service for the volume: move its prio
+        paths away, disable its TPGs. Refused when a block would lose
+        its last working path or the host does not answer, unless
+        force. Runs in background.
+
+  hosts   <volname> <host> maintenance stop [force] [rebalance]
+        bring the host back: sync its ALUA groups, enable its TPGs;
+        rebalance spreads the prio paths again, force skips the
+        tcmu-runner check. Runs in background.
+
   info    <volname/blockname>
         details about block device.
 
@@ -151,7 +172,10 @@ commands:
         delete block device.
 
   modify  <volname/blockname> [auth <enable|disable>] [size <size> [force]]
-        modify block device.
+                              [prio-path <host> [force]]
+        modify block device. prio-path moves the active/optimized path
+        to <host> on all hosts of the block, force skips hosts that do
+        not answer.
 
   replace <volname/blockname> <old-node> <new-node> [force]
         replace operations.
@@ -258,6 +282,139 @@ HA: 3
 EXPORTED NODE(S): 192.168.1.11 192.168.1.12 192.168.1.13
 </pre>
 <b>NOTE:</b> Block targets created using gluster-block utility will use TPG: 1 and LUN: 0.
+
+Check what the hosts of the volume really export. Every host is asked in
+parallel and reads its LIO configuration from configfs, a host that does not
+answer is reported after 3 seconds.
+<pre>
+<b># gluster-block hosts hosting-volume</b>
+VOLUME: hosting-volume
+HOST          DAEMON       TCMU-RUNNER  TARGET    BLOCKS  LOADED  ENABLED  PRIO
+192.168.1.11  0.5.27       running      active         1       1        1     1
+192.168.1.12  0.5.27       running      active         1       1        1     0
+192.168.1.13  unreachable  -            -              1       -        -     0
+
+PROBLEMS:
+  192.168.1.13: gluster-blockd unreachable (connection timed out after 3s)
+
+<b># gluster-block hosts hosting-volume 192.168.1.12</b>
+VOLUME: hosting-volume
+HOST: 192.168.1.12
+DAEMON: 0.5.27
+TCMU-RUNNER: running
+TARGET: active
+BLOCKS: 1
+LOADED: 1
+TPG-ENABLED: 1
+PRIO-PATHS: 0
+
+BLOCK         META                  BACKSTORE  TPG  ENABLED  ALUA  PRIO
+block-volume  CONFIGSUCCESS         loaded       2  yes      ano   no
+
+PROBLEMS: none
+</pre>
+BLOCKS counts the blocks the metadata says the host exports, LOADED those
+with a loaded tcmu backstore, ENABLED those whose TPG of the host is enabled
+and PRIO those whose prio (active/optimized ALUA) path is the host. PROBLEMS
+lists a host that does not answer, a stopped tcmu-runner, a block that is not
+loaded, a disabled TPG, an ALUA group that does not match the prio path and
+failed states in the metadata. With `--json` the result has `HEALTHY`.
+
+Move the prio (active/optimized) path of a block to another of its hosts, for
+example before taking the current one down. All hosts of the block put the
+LUN of the TPG of the new host into the AO ALUA group and the others into the
+ANO group, the initiators switch at their next path check. If one host fails
+the others are put back. A host that does not answer stops the move, `force`
+skips it, reload the block there once it is back.
+<pre>
+<b># gluster-block modify hosting-volume/block-volume prio-path 192.168.1.12</b>
+NAME: block-volume
+PRIO PATH: 192.168.1.12
+PREVIOUS PRIO PATH: 192.168.1.11
+SUCCESSFUL ON: 192.168.1.11 192.168.1.12 192.168.1.13
+RESULT: SUCCESS
+</pre>
+
+Spread the prio paths of all blocks of the volume evenly over the hosts that
+answer. Prio paths on a host that does not answer are moved first, that host
+is left out (reload its blocks once it is back). It runs in background like
+create, `--wait` waits for the result and `status` shows the progress;
+`dry-run` only prints the moves.
+<pre>
+<b># gluster-block hosts hosting-volume rebalance dry-run</b>
+VOLUME: hosting-volume
+MOVES: 2 (dry run)
+  block-1: 192.168.1.11 -> 192.168.1.12
+  block-4: 192.168.1.11 -> 192.168.1.13
+PRIO PATHS: 192.168.1.11=2 192.168.1.12=2 192.168.1.13=2
+RESULT: SUCCESS
+</pre>
+
+##### Host maintenance
+
+Take one host of the volume out of service (reboot, upgrade, hardware work)
+without I/O errors on the initiators, then bring it back. It works on the
+blocks of one block hosting volume, run it for every volume the host serves.
+
+`maintenance start`:
+1. refuses (unless `force`) when a block of the host has no other host that
+   answers and is not in maintenance, or when the host itself does not answer;
+2. marks the host `ENTERING`, moves the prio paths of its blocks to the other
+   host of the block with the fewest prio paths;
+3. waits until the initiators do no more I/O through the LUNs of the host:
+   multipath follows the new ALUA states at its next path check. The LUN
+   counters of the host (commands, MB read and written) are sampled every
+   2 seconds; a LUN is idle when for `GB_MAINT_IO_IDLE_SEC` (10) seconds
+   nothing was read or written and only the path checker sent commands
+   (its sessions stay, they are dropped when the TPG is disabled). If the
+   I/O does not stop within `GB_MAINT_IO_WAIT_SEC` (120) seconds the start
+   stops, the TPGs stay enabled, the host stays `ENTERING` and LUNS WITH I/O
+   lists the blocks with their initiators; run the start again once the
+   I/O moved (both values in `/etc/sysconfig/gluster-blockd`);
+4. disables the TPGs of the host and saves the target configuration, so a
+   reboot keeps them disabled, then marks the host `MAINTENANCE`.
+
+`force` skips the checks and the wait. It first shows what it would skip
+(blocks without another path, LUNs with I/O right now and their initiators)
+and asks to confirm; `--yes` answers for scripts.
+
+`hosts <volname> <host>` shows the initiators logged in to each LUN of the
+host (SESSIONS), with `--json` also the SCSI command and MB counters.
+
+While a host is in maintenance `create` and `replace` onto it and
+`modify prio-path` to it are refused, `hosts <volname> rebalance` leaves it
+out. `hosts` shows it with STATE `MAINTENANCE`; it being down or its TPGs
+being disabled is no problem then.
+
+`maintenance stop` needs the host to answer and to run tcmu-runner (`force`
+skips the tcmu-runner check), marks it `LEAVING`, puts the current ALUA
+groups on it (prio paths moved while it was out), enables its TPGs and clears
+the mark; blocks whose metadata reports a failed operation on the host are
+listed under NEEDS ATTENTION. With `rebalance` the prio paths of the volume
+are spread again. Both run in background, `--wait` waits for the result and
+`status` shows the progress. A start or stop that failed half way leaves the
+host `ENTERING` or `LEAVING`; run it again.
+<pre>
+<b># gluster-block --wait hosts hosting-volume 192.168.1.12 maintenance start</b>
+HOST: 192.168.1.12
+VOLUME: hosting-volume
+MAINTENANCE: start
+PRIO PATHS MOVED:
+  block-2: 192.168.1.12 -> 192.168.1.11
+TPGS DISABLED: 3 of 3
+STATE: MAINTENANCE
+RESULT: SUCCESS
+
+<b># gluster-block --wait hosts hosting-volume 192.168.1.12 maintenance stop rebalance</b>
+HOST: 192.168.1.12
+VOLUME: hosting-volume
+MAINTENANCE: stop
+TPGS ENABLED: 3 of 3
+REBALANCE:
+  block-2: 192.168.1.11 -> 192.168.1.12
+STATE: ACTIVE
+RESULT: SUCCESS
+</pre>
 
 ##### On the Client/Initiator node
 <pre>

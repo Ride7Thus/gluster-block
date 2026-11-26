@@ -30,7 +30,7 @@
                               "[force] [--json*]"
 # define  GB_MODIFY_HELP_STR  "gluster-block modify <volname/blockname> "      \
                                 "[auth <enable|disable>] [size <size> "       \
-                                "[force]] [--json*]"
+                                "[force]] [prio-path <host> [force]] [--json*]"
 # define  GB_REPLACE_HELP_STR "gluster-block replace <volname/blockname> "     \
                                 "<old-node> <new-node> [force] [--json*]"
 # define  GB_GENCONF_HELP_STR "gluster-block genconfig <volname[,volume2,volume3,...]> "\
@@ -38,6 +38,10 @@
 # define  GB_INFO_HELP_STR    "gluster-block info <volname/blockname> [--json*]"
 # define  GB_LIST_HELP_STR    "gluster-block list <volname> [--json*]"
 # define  GB_STATUS_HELP_STR  "gluster-block status <volname> [<operation-id>] [--json*]"
+# define  GB_HOSTS_HELP_STR   "gluster-block hosts <volname> [<host>] [--json*]\n" \
+                              "gluster-block hosts <volname> rebalance [dry-run] [--json*]\n" \
+                              "gluster-block hosts <volname> <host> maintenance start [force] [--json*]\n" \
+                              "gluster-block hosts <volname> <host> maintenance stop [force] [rebalance] [--json*]"
 
 # define  GB_CLI_WAIT_POLL_SEC  2
 
@@ -69,7 +73,11 @@ typedef enum clioperations {
   REPLACE_CLI = 7,
   GENCONF_CLI = 8,
   RELOAD_CLI = 9,
-  STATUS_CLI = 10
+  STATUS_CLI = 10,
+  HOSTS_CLI = 11,
+  MODIFY_PRIO_CLI = 12,
+  REBALANCE_CLI = 13,
+  HOST_MAINT_CLI = 14
 } clioperations;
 
 
@@ -155,11 +163,15 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   blockReplaceCli *replace_obj;
   blockGenConfigCli *genconfig_obj;
   blockStatusCli *status_obj;
+  blockHostsCli *hosts_obj;
+  blockModifyPrioCli *modify_prio_obj;
+  blockRebalanceCli *rebalance_obj;
+  blockHostMaintCli *host_maint_obj;
   blockStatusCli wait_obj = {{0},};
   blockResponse reply = {0,};
   blockResponse wait_reply;
   enum clnt_stat wait_stat;
-  bool confirmHint = false;
+  const char *confirmHint = NULL;     /* command to repeat with --yes */
   char          errMsg[2048] = {0};
   gbConfig *conf = NULL;
   char *cli_timeout;
@@ -254,7 +266,7 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
         ret = GB_CONFIRM_REQUIRED;
         goto out;
       }
-      confirmHint = true;
+      confirmHint = "create ...";
     }
     break;
   case DELETE_CLI:
@@ -333,6 +345,64 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
       goto out;
     }
     break;
+  case MODIFY_PRIO_CLI:
+    modify_prio_obj = cobj;
+    if (block_modify_prio_cli_1(modify_prio_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s block %s prio path on volume %s failed",
+          clnt_sperror(clnt, "block_modify_prio_cli_1"),
+          modify_prio_obj->block_name, modify_prio_obj->volume);
+      goto out;
+    }
+    break;
+  case REBALANCE_CLI:
+    rebalance_obj = cobj;
+    if (block_rebalance_cli_1(rebalance_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s rebalance on volume %s failed",
+          clnt_sperror(clnt, "block_rebalance_cli_1"), rebalance_obj->volume);
+      goto out;
+    }
+    break;
+  case HOST_MAINT_CLI:
+    host_maint_obj = cobj;
+    if (cliOptYes) {
+      host_maint_obj->confirmed = true;
+    }
+ maint_again:
+    if (block_host_maint_cli_1(host_maint_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s maintenance of host %s on volume %s failed",
+          clnt_sperror(clnt, "block_host_maint_cli_1"), host_maint_obj->host,
+          host_maint_obj->volume);
+      goto out;
+    }
+    /* force: the daemon tells what it would skip, ask before going on */
+    if (reply.exit == GB_CONFIRM_REQUIRED && !host_maint_obj->confirmed) {
+      if (glusterBlockCliConfirm(reply.out, host_maint_obj->json_resp)) {
+        LOG("cli", GB_LOG_INFO, "user confirmed forced maintenance of host "
+            "%s on volume %s", host_maint_obj->host, host_maint_obj->volume);
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+        memset(&reply, 0, sizeof(reply));
+        host_maint_obj->confirmed = true;
+        goto maint_again;
+      }
+      if (!host_maint_obj->json_resp && isatty(STDIN_FILENO)) {
+        clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+        memset(&reply, 0, sizeof(reply));
+        snprintf(errMsg, sizeof(errMsg), "maintenance of %s on volume %s "
+                 "cancelled", host_maint_obj->host, host_maint_obj->volume);
+        ret = GB_CONFIRM_REQUIRED;
+        goto out;
+      }
+      confirmHint = "hosts ... maintenance start force";
+    }
+    break;
+  case HOSTS_CLI:
+    hosts_obj = cobj;
+    if (block_hosts_cli_1(hosts_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s hosts on volume %s failed",
+          clnt_sperror(clnt, "block_hosts_cli_1"), hosts_obj->volume);
+      goto out;
+    }
+    break;
   }
 
   /*
@@ -341,9 +411,14 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
    * and print its final result, like the synchronous commands did.
    */
   if (cliOptWait && !reply.exit && reply.xdata.xdata_len &&
-      (opt == CREATE_CLI || opt == MODIFY_SIZE_CLI)) {
+      (opt == CREATE_CLI || opt == MODIFY_SIZE_CLI || opt == REBALANCE_CLI ||
+       opt == HOST_MAINT_CLI)) {
     GB_STRCPYSTATIC(wait_obj.volume, opt == CREATE_CLI ?
                     ((blockCreateCli *)cobj)->volume :
+                    opt == REBALANCE_CLI ?
+                    ((blockRebalanceCli *)cobj)->volume :
+                    opt == HOST_MAINT_CLI ?
+                    ((blockHostMaintCli *)cobj)->volume :
                     ((blockModifySizeCli *)cobj)->volume);
     snprintf(wait_obj.op_id, sizeof(wait_obj.op_id), "%.*s",
              (int)reply.xdata.xdata_len, reply.xdata.xdata_val);
@@ -391,8 +466,8 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   }
 
   if (confirmHint) {
-    MSG(stderr, "hint: run 'gluster-block --yes create ...' to create it "
-        "anyway");
+    MSG(stderr, "hint: run 'gluster-block --yes %s' to go on anyway",
+        confirmHint);
   }
 
   if (clnt) {
@@ -452,6 +527,27 @@ glusterBlockHelp(void)
       "        current or last long running operation on the volume, or the\n"
       "        result of the given operation (exit 115 while it runs).\n"
       "\n"
+      "  hosts   <volname> [<host>]\n"
+      "        state of the hosts that export the block devices of the volume:\n"
+      "        gluster-blockd, tcmu-runner, loaded blocks, enabled TPGs and\n"
+      "        prio paths; with <host> the state of each block on that host.\n"
+      "\n"
+      "  hosts   <volname> rebalance [dry-run]\n"
+      "        spread the prio paths of the volume evenly over the hosts that\n"
+      "        answer, moving them off hosts that do not first. Runs in\n"
+      "        background, dry-run only shows the moves.\n"
+      "\n"
+      "  hosts   <volname> <host> maintenance start [force]\n"
+      "        take the host out of service for the volume: move its prio\n"
+      "        paths away, disable its TPGs. Refused when a block would lose\n"
+      "        its last working path or the host does not answer, unless\n"
+      "        force. Runs in background.\n"
+      "\n"
+      "  hosts   <volname> <host> maintenance stop [force] [rebalance]\n"
+      "        bring the host back: sync its ALUA groups, enable its TPGs;\n"
+      "        rebalance spreads the prio paths again, force skips the\n"
+      "        tcmu-runner check. Runs in background.\n"
+      "\n"
       "  info    <volname/blockname>\n"
       "        details about block device.\n"
       "\n"
@@ -459,7 +555,10 @@ glusterBlockHelp(void)
       "        delete block device.\n"
       "\n"
       "  modify  <volname/blockname> [auth <enable|disable>] [size <size> [force]]\n"
-      "        modify block device.\n"
+      "                              [prio-path <host> [force]]\n"
+      "        modify block device. prio-path moves the active/optimized path\n"
+      "        to <host> on all hosts of the block, force skips hosts that do\n"
+      "        not answer.\n"
       "\n"
       "  replace <volname/blockname> <old-node> <new-node> [force]\n"
       "        replace operations.\n"
@@ -664,6 +763,7 @@ glusterBlockModify(int argcount, char **options, int json)
   size_t optind = 1;
   blockModifyCli mobj = {{0}, };
   blockModifySizeCli msobj = {{0}, };
+  blockModifyPrioCli mpobj = {{0}, };
   char volume[255] = {0};
   char block[255] = {0};
   ssize_t sparse_ret;
@@ -748,6 +848,38 @@ glusterBlockModify(int argcount, char **options, int json)
           "failed modifying size of block %s on volume %s",
           msobj.block_name, msobj.volume);
     }
+  } else if (!strcmp(options[optind], "prio-path")) {
+    optind++;
+    if (strlen(options[optind]) >= sizeof(mpobj.prio_path)) {
+      MSG(stderr, "host name '%s' is too long", options[optind]);
+      ret = -1;
+      goto out;
+    }
+    GB_STRCPYSTATIC(mpobj.prio_path, options[optind++]);
+
+    if ((argcount - optind) && !strcmp(options[optind], "force")) {
+      optind++;
+      mpobj.force = true;
+    }
+
+    if ((argcount - optind)) {
+      MSG(stderr, "unknown option '%s' for modify prio-path:\n%s",
+          options[optind], GB_MODIFY_HELP_STR);
+      ret = -1;
+      goto out;
+    }
+
+    GB_STRCPYSTATIC(mpobj.volume, volume);
+    GB_STRCPYSTATIC(mpobj.block_name, block);
+    mpobj.json_resp = json;
+    getCommandString(&mpobj.cmd, argcount, options);
+
+    ret = glusterBlockCliRPC_1(&mpobj, MODIFY_PRIO_CLI);
+    if (ret) {
+      LOG("cli", GB_LOG_ERROR,
+          "failed moving the prio path of block %s on volume %s",
+          mpobj.block_name, mpobj.volume);
+    }
   } else {
     MSG(stderr, "unknown option '%s' for modify:\n%s",
         options[optind], GB_MODIFY_HELP_STR);
@@ -755,6 +887,7 @@ glusterBlockModify(int argcount, char **options, int json)
   }
 
  out:
+  GB_FREE(mpobj.cmd);
   GB_FREE(msobj.cmd);
   GB_FREE(mobj.cmd);
 
@@ -1004,6 +1137,149 @@ glusterBlockCreate(int argcount, char **options, int json)
  out:
   GB_FREE(cobj.block_hosts);
   GB_FREE(cobj.cmd);
+
+  return ret;
+}
+
+
+/* hosts <volname> rebalance [dry-run] */
+static int
+glusterBlockHostsRebalance(int argcount, char **options, int json)
+{
+  blockRebalanceCli cobj = {{0},};
+  int ret = -1;
+
+
+  if (argcount == 4) {
+    if (strcmp(options[3], "dry-run")) {
+      MSG(stderr, "unknown option '%s' for hosts rebalance:\n%s", options[3],
+          GB_HOSTS_HELP_STR);
+      return -1;
+    }
+    cobj.dry_run = true;
+  }
+  cobj.json_resp = json;
+  cobj.async = true;
+  GB_STRCPYSTATIC(cobj.volume, options[1]);
+  getCommandString(&cobj.cmd, argcount, options);
+
+  ret = glusterBlockCliRPC_1(&cobj, REBALANCE_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "failed rebalancing volume %s", cobj.volume);
+  }
+  GB_FREE(cobj.cmd);
+
+  return ret;
+}
+
+
+/*
+ * hosts <volname> <host> maintenance start [force]
+ * hosts <volname> <host> maintenance stop [force] [rebalance]
+ */
+static int
+glusterBlockHostsMaintenance(int argcount, char **options, int json)
+{
+  blockHostMaintCli cobj = {{0},};
+  int optind = 5;
+  int ret = -1;
+
+
+  if (argcount < 5) {
+    MSG(stderr, "Inadequate arguments for hosts maintenance:\n%s",
+        GB_HOSTS_HELP_STR);
+    return -1;
+  }
+  if (!strcmp(options[4], "start")) {
+    cobj.start = true;
+  } else if (strcmp(options[4], "stop")) {
+    MSG(stderr, "unknown option '%s' for hosts maintenance, expecting start "
+        "or stop:\n%s", options[4], GB_HOSTS_HELP_STR);
+    return -1;
+  }
+  for (; optind < argcount; optind++) {
+    if (!strcmp(options[optind], "force") && !cobj.force) {
+      cobj.force = true;
+    } else if (!cobj.start && !strcmp(options[optind], "rebalance") &&
+               !cobj.rebalance) {
+      cobj.rebalance = true;
+    } else {
+      MSG(stderr, "unknown option '%s' for hosts maintenance %s:\n%s",
+          options[optind], options[4], GB_HOSTS_HELP_STR);
+      return -1;
+    }
+  }
+  if (strlen(options[2]) >= sizeof(cobj.host)) {
+    MSG(stderr, "invalid host '%s'", options[2]);
+    return -1;
+  }
+  GB_STRCPYSTATIC(cobj.volume, options[1]);
+  GB_STRCPYSTATIC(cobj.host, options[2]);
+  cobj.json_resp = json;
+  cobj.async = true;
+  getCommandString(&cobj.cmd, argcount, options);
+
+  ret = glusterBlockCliRPC_1(&cobj, HOST_MAINT_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "failed maintenance %s of host %s on volume %s",
+        options[4], cobj.host, cobj.volume);
+  }
+  GB_FREE(cobj.cmd);
+
+  return ret;
+}
+
+
+static int
+glusterBlockHosts(int argcount, char **options, int json)
+{
+  blockHostsCli cobj = {{0},};
+  int ret = -1;
+
+
+  if (argcount < 2 || argcount > 7) {
+    MSG(stderr, "Inadequate arguments for hosts:\n%s", GB_HOSTS_HELP_STR);
+    return -1;
+  }
+  cobj.json_resp = json;
+
+  if (!glusterBlockIsVolListAcceptable(options[1]) || strchr(options[1], ',')) {
+    MSG(stderr, "volume name(%s) should contain only aplhanumeric,'-' "
+        "and '_' characters", options[1]);
+    return -1;
+  }
+  GB_STRCPYSTATIC(cobj.volume, options[1]);
+
+  if (argcount >= 3 && !strcmp(options[2], "rebalance")) {
+    if (argcount > 4) {
+      MSG(stderr, "unknown option '%s' for hosts rebalance:\n%s", options[4],
+          GB_HOSTS_HELP_STR);
+      return -1;
+    }
+    return glusterBlockHostsRebalance(argcount, options, json);
+  }
+  if (argcount >= 4 && !strcmp(options[3], "maintenance")) {
+    return glusterBlockHostsMaintenance(argcount, options, json);
+  }
+  if (argcount >= 4) {
+    MSG(stderr, "unknown option '%s' for hosts:\n%s", options[3],
+        GB_HOSTS_HELP_STR);
+    return -1;
+  }
+
+  if (argcount == 3) {
+    if (strlen(options[2]) >= sizeof(cobj.host)) {
+      MSG(stderr, "invalid host '%s'", options[2]);
+      return -1;
+    }
+    GB_STRCPYSTATIC(cobj.host, options[2]);
+  }
+
+  ret = glusterBlockCliRPC_1(&cobj, HOSTS_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "failed getting hosts of volume %s",
+        cobj.volume);
+  }
 
   return ret;
 }
@@ -1340,6 +1616,13 @@ glusterBlockParseArgs(int count, char **options, size_t opt, int json)
       ret = glusterBlockStatus(count, options, json);
       if (ret) {
         LOG("cli", GB_LOG_ERROR, FAILED_STATUS);
+      }
+      goto out;
+
+    case GB_CLI_HOSTS:
+      ret = glusterBlockHosts(count, options, json);
+      if (ret) {
+        LOG("cli", GB_LOG_ERROR, FAILED_HOSTS);
       }
       goto out;
 

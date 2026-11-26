@@ -52,6 +52,9 @@ enum gbCapabilities {
 
   GB_CREATE_IO_TIMEOUT_CAP,
 
+  GB_MODIFY_PRIO_CAP,
+  GB_HOST_MAINTENANCE_CAP,
+
   GB_CAP_MAX
 };
 
@@ -72,6 +75,8 @@ static const char *const gbCapabilitiesLookup[] = {
   [GB_MODIFY_CAP]              = "modify",
   [GB_MODIFY_AUTH_CAP]         = "modify_auth",
   [GB_MODIFY_SIZE_CAP]         = "modify_size",
+  [GB_MODIFY_PRIO_CAP]         = "modify_prio",
+  [GB_HOST_MAINTENANCE_CAP]    = "host_maintenance",
 
   [GB_REPLACE_CAP]             = "replace",
 

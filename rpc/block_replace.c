@@ -10,6 +10,7 @@
 
 
 # include  "block_common.h"
+# include  "block_ha.h"
 
 # define   GB_GET_PORTAL_TPG    "targetcli /iscsi/" GB_TGCLI_IQN_PREFIX \
                                 "'%s' ls | grep -e tpg -e '%s' | grep -B1 '%s' | grep -o 'tpg\\w'"
@@ -696,6 +697,17 @@ block_replace_cli_1_svc_st(blockReplaceCli *blk, struct svc_req *rqstp)
           blk->volume, blk->block_name, strerror(errCode));
     }
     goto out;
+  }
+
+  {
+    char st[32];
+
+    if (blockHostInMaintenance(glfs, blk->new_node, st, sizeof(st))) {
+      GB_ASPRINTF(&errMsg, "host %s is in maintenance (%s) on volume %s",
+                  blk->new_node, st, blk->volume);
+      errCode = EBUSY;
+      goto out;
+    }
   }
 
   ret = blockParseValidServers(glfs, blk->block_name, &errCode, &list,

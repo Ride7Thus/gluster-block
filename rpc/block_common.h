@@ -69,7 +69,13 @@ typedef enum operations {
   VERSION_SRV,
   GENCONFIG_SRV,
   RELOAD_SRV,
-  STATUS_SRV
+  STATUS_SRV,
+  HOST_STATUS_SRV,
+  HOSTS_SRV,
+  MODIFY_PRIO_SRV,
+  REBALANCE_SRV,
+  HOST_TPG_SRV,
+  HOST_MAINT_SRV
 } operations;
 
 
@@ -187,6 +193,10 @@ char *blockInfoGetCurrentSizeOfNode(char *block_name,
 
 int glusterBlockCallRPC_1(char *host, void *cobj, operations opt,
                           bool *rpc_sent, char **out);
+
+int blockHostReachable(const char *addr, char *err, size_t len);
+
+bool blockConfigfsTpgHasPortal(const char *tpgdir, const char *host);
 
 void *glusterBlockCreateRemote(void *data);
 
