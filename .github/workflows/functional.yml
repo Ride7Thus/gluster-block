@@ -1,0 +1,51 @@
+name: Functional tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # API v1 changes only compatibly: docs/api/openapi.yaml against the last
+  # release and, for a pull request, against its base branch
+  api-compat:
+    name: API contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Against the last release
+        run: tests/compat/api-check.sh
+
+      - name: Against the base branch
+        if: github.event_name == 'pull_request'
+        run: tests/compat/api-check.sh "origin/${{ github.base_ref }}"
+
+  # gluster-blockd, gluster-block-apid and the cli on a test cluster in a
+  # privileged container: glusterd, three hosts in network namespaces, no
+  # LIO (tests/functional/setup.sh); the API responses are checked against
+  # docs/api/openapi.yaml, the daemon answers against
+  # tests/compat/json/daemon.schema.json
+  functional:
+    name: Test cluster
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run the functional tests
+        run: tests/functional/run.sh
+
+      - name: Upload logs and fixtures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional
+          path: build/functional/
+          if-no-files-found: warn

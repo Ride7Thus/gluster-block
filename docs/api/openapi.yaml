@@ -1,0 +1,655 @@
+openapi: 3.0.3
+info:
+  title: gluster-block API
+  version: "1.0"
+  description: |
+    HTTP API of gluster-block, served by gluster-block-apid on every gluster
+    node. It is a bridge to the local gluster-blockd, which coordinates the
+    other hosts of a block: any node can be asked.
+
+    Transport: the unix socket /run/gluster-block/api.sock (root only), used
+    by the Cockpit plugin.
+
+    Compatibility: v1 only changes compatibly. Clients must ignore fields
+    they do not know; new fields, endpoints and enum values may be added.
+    Removing or renaming a field or changing its type needs /api/v2. CI
+    compares this file with the one of the last release (oasdiff).
+
+    What the hosts of a volume support is in `features` of
+    `GET /api/v1/version?volume=<name>`: a client offers an action only when
+    its feature is listed.
+  license:
+    name: GPL-2.0-only OR LGPL-3.0-or-later
+
+servers:
+  - url: http://localhost
+    description: unix socket /run/gluster-block/api.sock
+
+paths:
+  /api/v1:
+    get:
+      summary: API version
+      operationId: getIndex
+      responses:
+        "200":
+          description: versions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Index"}
+
+  /healthz:
+    get:
+      summary: gluster-block-apid and gluster-blockd answer and are compatible
+      operationId: getHealth
+      responses:
+        "200":
+          description: healthy
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/healthz:
+    get:
+      summary: same as /healthz
+      operationId: getHealthV1
+      responses:
+        "200":
+          description: healthy
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/version:
+    get:
+      summary: versions, capabilities and the features a client may offer
+      operationId: getVersion
+      parameters:
+        - name: volume
+          in: query
+          description: |
+            also ask every host that exports blocks of this volume; features
+            are then those all hosts that answer support
+          schema: {$ref: "#/components/schemas/VolumeName"}
+      responses:
+        "200":
+          description: versions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Version"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes:
+    get:
+      summary: gluster volumes of the cluster
+      operationId: listVolumes
+      parameters:
+        - $ref: "#/components/parameters/Refresh"
+      responses:
+        "200":
+          description: volumes
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/VolumeList"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+    get:
+      summary: one gluster volume
+      operationId: getVolume
+      parameters:
+        - $ref: "#/components/parameters/Refresh"
+      responses:
+        "200":
+          description: the volume
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Volume"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/blocks:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+    get:
+      summary: block devices of a block hosting volume
+      operationId: listBlocks
+      parameters:
+        - name: detail
+          in: query
+          description: every block with all its details (one daemon call per block)
+          schema: {type: boolean}
+      responses:
+        "200":
+          description: blocks
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BlockList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/blocks/{block}:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+      - $ref: "#/components/parameters/Block"
+    get:
+      summary: one block device
+      operationId: getBlock
+      parameters:
+        - name: show_password
+          in: query
+          description: include the CHAP password
+          schema: {type: boolean}
+      responses:
+        "200":
+          description: the block
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Block"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/hosts:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+    get:
+      summary: state of the hosts that export blocks of the volume
+      operationId: listHosts
+      responses:
+        "200":
+          description: hosts
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HostList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/hosts/{host}:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+      - $ref: "#/components/parameters/Host"
+    get:
+      summary: one host and the state of each block of the volume on it
+      operationId: getHost
+      responses:
+        "200":
+          description: the host
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HostDetail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/operations:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+    get:
+      summary: the running or the last long operation of the volume
+      description: |
+        Only one long operation (create, resize, rebalance, maintenance) runs
+        on a volume at a time; others are refused with 423 meanwhile.
+      operationId: listOperations
+      responses:
+        "200":
+          description: operations
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/operations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+      - name: id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      summary: one long operation, poll it until state is not running
+      description: Results are kept for a day.
+      operationId: getOperation
+      responses:
+        "200":
+          description: the operation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationDetail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+components:
+  parameters:
+    Volume:
+      name: volume
+      in: path
+      required: true
+      schema: {$ref: "#/components/schemas/VolumeName"}
+    Block:
+      name: block
+      in: path
+      required: true
+      schema: {type: string, pattern: "^[A-Za-z0-9_-]{1,254}$"}
+    Host:
+      name: host
+      in: path
+      required: true
+      description: the host as written in the metadata of the blocks
+      schema: {type: string, pattern: "^[A-Za-z0-9_.:-]{1,254}$"}
+    Refresh:
+      name: refresh
+      in: query
+      description: read the volumes again instead of the list cached for 15 s
+      schema: {type: boolean}
+
+  responses:
+    BadRequest:
+      description: invalid name or argument (invalid_request)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: |
+        not_found, volume_not_found, not_block_hosting, block_not_found,
+        host_not_found, operation_not_found
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Conflict:
+      description: volume_not_ready (the volume is not started or not reachable)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unavailable:
+      description: |
+        daemon_unavailable (gluster-blockd does not answer) or
+        daemon_incompatible (gluster-blockd is older than gluster-block-apid,
+        it was upgraded but not restarted)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    VolumeName:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{1,254}$"
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |
+                not_found, method_not_allowed, invalid_request,
+                volume_not_found, not_block_hosting, volume_not_ready,
+                block_not_found, host_not_found, operation_not_found,
+                already_exists, confirm_required, volume_busy,
+                not_permitted, no_space, host_unreachable, operation_failed,
+                daemon_unavailable, daemon_incompatible, daemon_timeout,
+                daemon_error
+            message: {type: string}
+            errno: {type: integer, description: errno of gluster-blockd}
+
+    Index:
+      type: object
+      required: [api_version, apid_version]
+      properties:
+        api_version: {type: string, example: "1.0"}
+        apid_version: {type: string}
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [ok]}
+
+    Version:
+      type: object
+      required: [api_version, apid_version, daemon, features]
+      properties:
+        api_version: {type: string, example: "1.0"}
+        apid_version: {type: string}
+        daemon:
+          type: object
+          required: [version, cli_rpc_rev, capabilities]
+          properties:
+            version: {type: string, nullable: true}
+            cli_rpc_rev: {type: integer, nullable: true}
+            capabilities:
+              type: array
+              items: {type: string}
+        volume:
+          type: object
+          required: [name, hosts, capabilities]
+          properties:
+            name: {type: string}
+            hosts:
+              type: array
+              items:
+                type: object
+                required: [host, daemon, version, capabilities, error]
+                properties:
+                  host: {type: string}
+                  daemon:
+                    type: string
+                    nullable: true
+                    description: up, unreachable, old-version, error, unknown
+                  version: {type: string, nullable: true}
+                  capabilities:
+                    type: array
+                    items: {type: string}
+                  error: {type: string, nullable: true}
+            capabilities:
+              type: array
+              description: those of this daemon and all hosts that answer
+              items: {type: string}
+        features:
+          type: array
+          description: |
+            what a client may offer: volumes, block_create, block_delete,
+            block_resize, block_auth, prio_path, rebalance, host_maintenance
+          items: {type: string}
+
+    Brick:
+      type: object
+      required: [host, path, arbiter]
+      properties:
+        host: {type: string, nullable: true}
+        path: {type: string, nullable: true}
+        arbiter: {type: boolean}
+
+    Volume:
+      type: object
+      required: [name, type, status, brick_count, bricks, block_hosting, blocks, error]
+      properties:
+        name: {type: string}
+        type:
+          type: string
+          nullable: true
+          description: gluster volume type, lower case (replicate, disperse, distribute, ...)
+        status:
+          type: string
+          nullable: true
+          description: started, stopped, created
+        brick_count:
+          type: string
+          nullable: true
+          description: as gluster shows it, "1 x 3 = 3", "1 x (2 + 1) = 3"
+        bricks:
+          type: array
+          items: {$ref: "#/components/schemas/Brick"}
+        block_hosting:
+          type: boolean
+          nullable: true
+          description: the volume has block devices, null when it is not started or not reachable
+        blocks:
+          type: integer
+          nullable: true
+          description: number of block devices when it hosts blocks
+        error: {type: string, nullable: true}
+
+    VolumeList:
+      type: object
+      required: [volumes]
+      properties:
+        volumes:
+          type: array
+          items: {$ref: "#/components/schemas/Volume"}
+
+    BlockHost:
+      type: object
+      required: [host, state, exported]
+      properties:
+        host: {type: string, nullable: true}
+        state:
+          type: string
+          nullable: true
+          description: state of the host in the metadata (CONFIGSUCCESS, CONFIGFAIL, ...)
+        exported: {type: boolean}
+
+    Block:
+      type: object
+      required: [name, volume, gbid, iqn, size_bytes, ha, prio_path, hosts,
+                 exported_on, failed_on, resize_failed_on, portals,
+                 io_timeout_sec, ring_buffer_mb, block_size, prealloc,
+                 create_state, auth]
+      properties:
+        name: {type: string, nullable: true}
+        volume: {type: string, nullable: true}
+        gbid: {type: string, nullable: true}
+        iqn: {type: string, nullable: true}
+        size_bytes: {type: integer, format: int64, nullable: true}
+        ha: {type: integer, nullable: true}
+        prio_path:
+          type: string
+          nullable: true
+          description: host of the active/optimized path
+        hosts:
+          type: array
+          items: {$ref: "#/components/schemas/BlockHost"}
+        exported_on:
+          type: array
+          items: {type: string}
+        failed_on:
+          type: array
+          items: {type: string}
+        resize_failed_on:
+          type: array
+          items:
+            type: object
+            required: [host, size]
+            properties:
+              host: {type: string}
+              size: {type: string, nullable: true}
+        portals:
+          type: array
+          items: {type: string}
+        io_timeout_sec: {type: integer, nullable: true}
+        ring_buffer_mb: {type: integer, nullable: true}
+        block_size: {type: integer, nullable: true}
+        prealloc: {type: string, nullable: true, enum: [full, "no", null]}
+        create_state: {type: string, nullable: true, enum: [in_progress, done, failed, null]}
+        auth:
+          type: object
+          required: [enabled, username]
+          properties:
+            enabled: {type: boolean}
+            username: {type: string, nullable: true}
+            password:
+              type: string
+              nullable: true
+              description: only with show_password
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        errno: {type: integer}
+
+    BlockList:
+      type: object
+      required: [volume, blocks]
+      properties:
+        volume: {type: string}
+        blocks:
+          type: array
+          description: |
+            names only, or every Block with detail; a block that can not be
+            read has its name and an error
+          items:
+            type: object
+            required: [name]
+            additionalProperties: true
+            properties:
+              name: {type: string}
+
+    Host:
+      type: object
+      required: [host, daemon, version, tcmu_runner, target_service,
+                 maintenance, blocks, loaded, tpg_enabled, prio_paths, problems]
+      properties:
+        host: {type: string, nullable: true}
+        daemon:
+          type: string
+          nullable: true
+          description: up, unreachable, old-version, error, unknown
+        version: {type: string, nullable: true}
+        tcmu_runner: {type: string, nullable: true, description: "running, stopped"}
+        target_service: {type: string, nullable: true, description: "active, inactive, unknown"}
+        maintenance:
+          type: string
+          nullable: true
+          description: active, entering, maintenance, leaving
+        blocks: {type: integer, nullable: true}
+        loaded: {type: integer, nullable: true}
+        tpg_enabled: {type: integer, nullable: true}
+        prio_paths: {type: integer, nullable: true}
+        problems:
+          type: array
+          items: {type: string}
+
+    HostBlockState:
+      type: object
+      required: [name, gbid, meta_state, prio, reported, backstore_loaded, tpg,
+                 tpg_enabled, alua, scsi_cmds, read_mb, write_mb, sessions, problem]
+      properties:
+        name: {type: string, nullable: true}
+        gbid: {type: string, nullable: true}
+        meta_state: {type: string, nullable: true}
+        prio: {type: boolean, description: the metadata names the host the prio path}
+        reported: {type: boolean, description: the host answered for this block}
+        backstore_loaded: {type: boolean, nullable: true}
+        tpg: {type: integer, nullable: true}
+        tpg_enabled: {type: boolean, nullable: true}
+        alua:
+          type: string
+          nullable: true
+          description: ALUA group of the LUN on the host, ao (prio path) or ano
+        scsi_cmds: {type: integer, format: int64, nullable: true}
+        read_mb: {type: integer, format: int64, nullable: true}
+        write_mb: {type: integer, format: int64, nullable: true}
+        sessions:
+          type: array
+          items: {type: string}
+        problem: {type: string, nullable: true}
+
+    HostDetail:
+      allOf:
+        - $ref: "#/components/schemas/Host"
+        - type: object
+          required: [volume, block_states]
+          properties:
+            volume: {type: string}
+            block_states:
+              type: array
+              items: {$ref: "#/components/schemas/HostBlockState"}
+
+    HostList:
+      type: object
+      required: [volume, healthy, hosts]
+      properties:
+        volume: {type: string}
+        healthy: {type: boolean}
+        hosts:
+          type: array
+          items: {$ref: "#/components/schemas/Host"}
+
+    OperationStep:
+      type: object
+      required: [name, done, total, percent, remaining_sec]
+      properties:
+        name: {type: string, nullable: true}
+        done: {type: integer, format: int64, nullable: true}
+        total: {type: integer, format: int64, nullable: true}
+        percent: {type: integer, nullable: true}
+        remaining_sec: {type: integer, nullable: true}
+
+    Operation:
+      type: object
+      required: [id, volume, state]
+      properties:
+        id: {type: string, nullable: true}
+        volume: {type: string, nullable: true}
+        operation:
+          type: string
+          nullable: true
+          description: create, modify-size, rebalance, maintenance-start, maintenance-stop
+        block: {type: string, nullable: true}
+        gbid: {type: string, nullable: true}
+        node: {type: string, nullable: true, description: the node that runs it}
+        state:
+          type: string
+          nullable: true
+          enum: [running, succeeded, failed, interrupted, null]
+        phase: {type: string, nullable: true}
+        size_bytes: {type: integer, format: int64, nullable: true}
+        allocated: {type: string, nullable: true}
+        step:
+          allOf:
+            - $ref: "#/components/schemas/OperationStep"
+          nullable: true
+        started_at: {type: integer, format: int64, nullable: true, description: unix time}
+        updated_at: {type: integer, format: int64, nullable: true}
+        finished_at: {type: integer, format: int64, nullable: true}
+        error:
+          type: object
+          nullable: true
+          required: [errno, message]
+          properties:
+            errno: {type: integer}
+            message: {type: string, nullable: true}
+
+    OperationDetail:
+      allOf:
+        - $ref: "#/components/schemas/Operation"
+        - type: object
+          required: [result]
+          properties:
+            result:
+              type: object
+              nullable: true
+              description: |
+                what the operation returned when it succeeded, keys in
+                snake_case; its content depends on the operation
+              additionalProperties: true
+
+    OperationList:
+      type: object
+      required: [volume, busy, current, last]
+      properties:
+        volume: {type: string}
+        busy: {type: boolean}
+        current:
+          allOf:
+            - $ref: "#/components/schemas/Operation"
+          nullable: true
+        last:
+          allOf:
+            - $ref: "#/components/schemas/Operation"
+          nullable: true

@@ -446,7 +446,7 @@ def self_test(current, use_rpcgen):
     ok_cases = [
         ("add a procedure",
          r"(BLOCK_HOST_MAINT_CLI\(blockHostMaintCli\) = 14;)",
-         r"\1\n    blockResponse BLOCK_NEW_CLI(blockNewCli) = 15;"),
+         r"\1\n    blockResponse BLOCK_NEW_CLI(blockNewCli) = 999;"),
         ("add a struct",
          r"(struct blockResponse \{)", r"struct blockNewCli {\n  char volume[255];\n};\n\n\1"),
         ("add an enum member",

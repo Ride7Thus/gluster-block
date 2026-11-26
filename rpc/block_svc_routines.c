@@ -385,6 +385,8 @@ glusterBlockCallRPC_1(char *host, void *cobj,
   case HOSTS_SRV:
   case REBALANCE_SRV:
   case HOST_MAINT_SRV:
+  case VERSION_CLI_SRV:
+  case VOLUMES_SRV:
       goto out;
   case REPLACE_SRV:
       *rpc_sent = TRUE;

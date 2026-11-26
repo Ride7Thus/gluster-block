@@ -254,8 +254,14 @@ getSoTgArraysForAllVolume(struct soTgObj *obj, blockGenConfigCli *blk,
       goto optfail;
     }
 
-    lkfd = glusterBlockCreateMetaLockFile(glfs, vols->data[i], errCode, errMsg);
+    lkfd = glusterBlockOpenMetaLockFile(glfs, vols->data[i], errCode, errMsg);
     if (!lkfd) {
+      if (*errCode == ENOENT) {
+        /* no blocks on this volume, nothing to generate */
+        *errCode = 0;
+        GB_FREE(*errMsg);
+        continue;
+      }
       LOG("mgmt", GB_LOG_ERROR, "%s %s", FAILED_CREATING_META, vols->data[i]);
       goto optfail;
     }
@@ -332,10 +338,13 @@ getSoTgArraysForAllVolume(struct soTgObj *obj, blockGenConfigCli *blk,
       LOG("mgmt", GB_LOG_ERROR, "glfs_closedir(%s): on volume %s failed[%s]",
           GB_METADIR, vols->data[i], strerror(errno));
     }
+    tgmdfd = NULL;
     if (lkfd && glfs_close(lkfd) != 0) {
       LOG("mgmt", GB_LOG_ERROR, "glfs_close(%s): on volume %s failed[%s]",
           GB_TXLOCKFILE, vols->data[i], strerror(errno));
     }
+    /* the error paths below close them again otherwise */
+    lkfd = NULL;
   }
 
   ret = 0;

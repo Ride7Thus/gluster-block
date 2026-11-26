@@ -78,12 +78,15 @@ AC_CONFIG_FILES([gluster-block.spec
                  Makefile
                  rpc/Makefile
                  rpc/rpcl/Makefile
+                 client/Makefile
                  cli/Makefile
+                 api/Makefile
                  daemon/Makefile
                  utils/Makefile
                  systemd/Makefile
                  systemd/gluster-blockd.service
                  systemd/gluster-block-target.service
+                 systemd/gluster-block-apid.service
                  systemd/gluster-blockd.initd
                  docs/Makefile
                  extras/Makefile
@@ -156,6 +159,24 @@ else
                   without --enable-tirpc=no])])
 fi
 
+# gluster-block-apid, the HTTP API (libmicrohttpd), built when it is found
+AC_ARG_ENABLE([api],
+              AS_HELP_STRING([--enable-api],
+                             [build gluster-block-apid, the HTTP API [default: auto]]),
+              [enable_api=$enableval], [enable_api=auto])
+build_api=no
+if test "x$enable_api" != "xno"; then
+    PKG_CHECK_MODULES([MHD], [libmicrohttpd >= 0.9.59], [build_api=yes],
+                      [if test "x$enable_api" = "xyes"; then
+                           AC_MSG_ERROR([libmicrohttpd >= 0.9.59 is required for
+                  gluster-block-apid, install libmicrohttpd-devel (EL) or
+                  libmicrohttpd-dev (Debian, Ubuntu)])
+                       fi])
+fi
+AM_CONDITIONAL([BUILD_API], [test "x$build_api" = "xyes"])
+AC_SUBST(MHD_CFLAGS)
+AC_SUBST(MHD_LIBS)
+
 AC_CHECK_LIB([uuid], [uuid_generate], [UUID="-luuid"],
              AC_MSG_ERROR([uuid library is required to build gluster-block]))
 AC_SUBST(UUID)
@@ -219,6 +240,7 @@ cat <<EOF
   Linker.........: $LD $LDFLAGS $LIBS
   Using Tirpc....: $enable_tirpc
   Using systemd..: $systemd_summary
+  HTTP API.......: $build_api
 ---------------------------------------------
 
 Check the above options and compile with:

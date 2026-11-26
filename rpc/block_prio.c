@@ -692,7 +692,7 @@ block_modify_prio_cli_1_svc_st(blockModifyPrioCli *blk, struct svc_req *rqstp)
     goto initfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
     LOG("mgmt", GB_LOG_ERROR, "%s %s for block %s",
         FAILED_CREATING_META, blk->volume, blk->block_name);
@@ -1224,7 +1224,7 @@ blockRebalanceRun(blockRebalanceCli *blk)
     goto initfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
     goto initfail;
   }

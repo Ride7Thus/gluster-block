@@ -12,6 +12,7 @@
 # include  "common.h"
 # include  "block.h"
 # include  "config.h"
+# include  "gb-client.h"
 
 # include <arpa/inet.h>
 # include <strings.h>
@@ -42,6 +43,8 @@
                               "gluster-block hosts <volname> rebalance [dry-run] [--json*]\n" \
                               "gluster-block hosts <volname> <host> maintenance start [force] [--json*]\n" \
                               "gluster-block hosts <volname> <host> maintenance stop [force] [rebalance] [--json*]"
+# define  GB_VOLUMES_HELP_STR "gluster-block volumes [--json*]"
+# define  GB_VERSION_HELP_STR "gluster-block version [<volname>] [--json*]"
 
 # define  GB_CLI_WAIT_POLL_SEC  2
 
@@ -77,7 +80,9 @@ typedef enum clioperations {
   HOSTS_CLI = 11,
   MODIFY_PRIO_CLI = 12,
   REBALANCE_CLI = 13,
-  HOST_MAINT_CLI = 14
+  HOST_MAINT_CLI = 14,
+  VERSION_CLI = 15,
+  VOLUMES_CLI = 16
 } clioperations;
 
 
@@ -150,9 +155,8 @@ static int
 glusterBlockCliRPC_1(void *cobj, clioperations opt)
 {
   CLIENT *clnt = NULL;
+  gbClient gbc = {NULL, RPC_ANYSOCK};
   int ret = -1;
-  int sockfd = RPC_ANYSOCK;
-  struct sockaddr_un saun = {0,};
   blockCreateCli *create_obj;
   blockDeleteCli *delete_obj;
   blockReloadCli *reload_obj;
@@ -167,6 +171,8 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   blockModifyPrioCli *modify_prio_obj;
   blockRebalanceCli *rebalance_obj;
   blockHostMaintCli *host_maint_obj;
+  blockVersionCli *version_obj;
+  blockVolumesCli *volumes_obj;
   blockStatusCli wait_obj = {{0},};
   blockResponse reply = {0,};
   blockResponse wait_reply;
@@ -177,44 +183,11 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
   char *cli_timeout;
 
 
-  if (strlen(GB_UNIX_ADDRESS) > SUN_PATH_MAX) {
-    snprintf (errMsg, sizeof (errMsg), "%s: path length is more than "
-              "SUN_PATH_MAX: (%zu > %zu chars)", GB_UNIX_ADDRESS,
-              strlen(GB_UNIX_ADDRESS), SUN_PATH_MAX);
+  if (gbClientConnect(&gbc, GB_UNIX_ADDRESS, 0, errMsg, sizeof(errMsg),
+                      NULL)) {
     goto out;
   }
-
-  saun.sun_family = AF_UNIX;
-  GB_STRCPYSTATIC(saun.sun_path, GB_UNIX_ADDRESS);
-
-#ifndef HAVE_LIBTIRPC
-  if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
-    snprintf (errMsg, sizeof (errMsg), "%s: socket creation failed (%s)",
-              GB_UNIX_ADDRESS, strerror (errno));
-    goto out;
-  }
-
-  if (connect(sockfd, (struct sockaddr *) &saun,
-              sizeof(struct sockaddr_un)) < 0) {
-    if (errno == ENOENT || errno == ECONNREFUSED) {
-      snprintf (errMsg, sizeof (errMsg), "Connection failed. Please check if "
-                "gluster-block daemon is operational.");
-    } else {
-      snprintf (errMsg, sizeof (errMsg), "%s: connect failed (%s)",
-                GB_UNIX_ADDRESS, strerror (errno));
-    }
-    goto out;
-  }
-#endif  /* HAVE_LIBTIRPC */
-
-  clnt = clntunix_create((struct sockaddr_un *) &saun,
-                         GLUSTER_BLOCK_CLI, GLUSTER_BLOCK_CLI_VERS,
-                         &sockfd, 0, 0);
-  if (!clnt) {
-    snprintf (errMsg, sizeof (errMsg), "%s, unix addr %s",
-              clnt_spcreateerror("client create failed"), GB_UNIX_ADDRESS);
-    goto out;
-  }
+  clnt = gbc.clnt;
 
   conf = glusterBlockCLILoadConfig();
   if (!conf) {
@@ -403,6 +376,28 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
       goto out;
     }
     break;
+  case VERSION_CLI:
+    version_obj = cobj;
+    if (block_version_cli_1(version_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s version failed",
+          clnt_sperror(clnt, "block_version_cli_1"));
+      snprintf(errMsg, sizeof(errMsg), "%s",
+               clnt_sperror(clnt, "gluster-blockd does not answer the "
+                            "version request (older than this cli?)"));
+      goto out;
+    }
+    break;
+  case VOLUMES_CLI:
+    volumes_obj = cobj;
+    if (block_volumes_cli_1(volumes_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s volumes failed",
+          clnt_sperror(clnt, "block_volumes_cli_1"));
+      snprintf(errMsg, sizeof(errMsg), "%s",
+               clnt_sperror(clnt, "gluster-blockd does not answer the "
+                            "volumes request (older than this cli?)"));
+      goto out;
+    }
+    break;
   }
 
   /*
@@ -476,12 +471,8 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
       LOG("cli", GB_LOG_ERROR, "%s",
           clnt_sperror(clnt, "clnt_freeres failed"));
     }
-    clnt_destroy (clnt);
   }
-
-  if (sockfd != RPC_ANYSOCK) {
-    close (sockfd);
-  }
+  gbClientClose(&gbc);
 
   if (conf) {
     GB_FREE(conf->configPath);
@@ -548,6 +539,16 @@ glusterBlockHelp(void)
       "        rebalance spreads the prio paths again, force skips the\n"
       "        tcmu-runner check. Runs in background.\n"
       "\n"
+      "  volumes\n"
+      "        gluster volumes of the cluster: type, status, bricks and the\n"
+      "        number of block devices of the volumes that host them.\n"
+      "\n"
+      "  version [<volname>]\n"
+      "        alone the version of the cli; with --json* or a volume the\n"
+      "        version, cli RPC revision and capabilities of gluster-blockd,\n"
+      "        with a volume also of every host of the volume and the\n"
+      "        capabilities all hosts that answer share.\n"
+      "\n"
       "  info    <volname/blockname>\n"
       "        details about block device.\n"
       "\n"
@@ -571,9 +572,6 @@ glusterBlockHelp(void)
       "\n"
       "  help\n"
       "        show this message and exit.\n"
-      "\n"
-      "  version\n"
-      "        show version info and exit.\n"
       "\n"
       "common cli options: (fixed formats)\n"
       "  timeout <seconds>\n"
@@ -1324,6 +1322,65 @@ glusterBlockStatus(int argcount, char **options, int json)
 
 
 static int
+glusterBlockVolumes(int argcount, char **options, int json)
+{
+  blockVolumesCli cobj = {0};
+  int ret;
+
+
+  GB_ARGCHECK_OR_RETURN(argcount, 1, "volumes", GB_VOLUMES_HELP_STR);
+  cobj.json_resp = json;
+
+  ret = glusterBlockCliRPC_1(&cobj, VOLUMES_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "%s", "failed listing the volumes");
+  }
+
+  return ret;
+}
+
+
+/*
+ * 'version' alone prints the version of the cli as before, with a volume or
+ * --json* it asks gluster-blockd (and the hosts of the volume).
+ */
+static int
+glusterBlockVersion(int argcount, char **options, int json)
+{
+  blockVersionCli cobj = {{0},};
+  int ret;
+
+
+  if (argcount > 2) {
+    MSG(stderr, "Inadequate arguments for version:\n%s", GB_VERSION_HELP_STR);
+    return -1;
+  }
+  if (argcount == 1 && !json) {
+    MSG(stdout, "%s", argp_program_version);
+    return 0;
+  }
+  cobj.json_resp = json;
+
+  if (argcount == 2) {
+    if (!glusterBlockIsVolListAcceptable(options[1]) ||
+        strchr(options[1], ',')) {
+      MSG(stderr, "volume name(%s) should contain only aplhanumeric,'-' "
+          "and '_' characters", options[1]);
+      return -1;
+    }
+    GB_STRCPYSTATIC(cobj.volume, options[1]);
+  }
+
+  ret = glusterBlockCliRPC_1(&cobj, VERSION_CLI);
+  if (ret) {
+    LOG("cli", GB_LOG_ERROR, "%s", "failed getting the daemon version");
+  }
+
+  return ret;
+}
+
+
+static int
 glusterBlockList(int argcount, char **options, int json)
 {
   blockListCli cobj = {{0},};
@@ -1675,7 +1732,14 @@ glusterBlockParseArgs(int count, char **options, size_t opt, int json)
       glusterBlockHelp();
       goto out;
 
+    case GB_CLI_VOLUMES:
+      ret = glusterBlockVolumes(count, options, json);
+      goto out;
+
     case GB_CLI_VERSION:
+      ret = glusterBlockVersion(count, options, json);
+      goto out;
+
     case GB_CLI_HYPHEN_VERSION:
       MSG(stdout, "%s", argp_program_version);
       goto out;

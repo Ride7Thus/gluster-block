@@ -3,8 +3,7 @@
 Ветка `cockpit-plugin` (от master 0.5.33). Модуль Cockpit для управления
 gluster-block, отдельный RPM-пакет `cockpit-gluster-block`.
 
-Статус: **решения по ревью приняты (§9)**, ждёт апрува на выполнение,
-ничего не реализовано.
+Статус: апрув получен 2026-11-26. Готово: этапы 0 и 1 (§8, отметки «готово»).
 
 ## 0. Термины
 
@@ -550,10 +549,30 @@ Grafana сразу (В5): `extras/monitoring/gluster-block-dashboard.json`:
 
 0. `tests: RPC compatibility check` — эталон `block.x` текущего релиза 0.5.33,
    `rpc-check.sh`, XDR-проверка, job в CI (§7.3 п.1). До любых изменений RPC.
+   **Готово:** эталоны v0.5.27 и v0.5.33 (из тегов), XDR сравнивается по
+   функциям, которые генерирует rpcgen, `--self-test` на 13 случаях, `make check` во всех
+   CI-сборках.
 1. `api: gluster-block-apid with read-only API` — `libgbclient`, `volumes`,
    `BLOCK_VERSION_CLI`, apid на unix-сокете, эндпоинты чтения, `/version`,
    v1 JSON, OpenAPI, JSON-схемы, подпакет `gluster-block-api`, функциональный
    тест в контейнере, oasdiff.
+   **Готово.** Уточнения по ходу работы:
+   - `gluster-block version` без аргументов печатает версию CLI, как раньше,
+     а `version --json` и `version <vol>` опрашивают демон (`CLI-RPC-REV` = 16).
+   - В JSON `info` добавлены `SIZE-BYTES`, `PRIO-PATH`, `RING-BUFFER-MB`, `BLOCK-SIZE`,
+     `IO-TIMEOUT-SEC`, `PREALLOC`, `ENTRY`, `HOST-STATES`: без них v1 не построить.
+   - Все команды, кроме `create`, создавали `/block-meta` и `meta.lock` на
+     томе, о котором их спросили (`list`, `info`, `hosts`, `delete`...). Исправлено:
+     метаданные создаёт только `create` (`glusterBlockOpenMetaLockFile`), `list` и
+     `hosts` на таком томе пусты, остальные отвечают ENOENT. apid ещё отвечает
+     404 `not_block_hosting`, чтобы клиент отличал такой том от пустого.
+   - На томе одна долгая операция за раз, остальные получают EBUSY → 423
+     `volume_busy`.
+   - CLI-сервер демона однопоточный, параллельные запросы apid ждут друг
+     друга (как команды CLI). `volumes` кэшируется на 15 с.
+   - Стенд `tests/functional/` (`run.sh`): glusterd, 3 хоста в netns, у каждого
+     свой configfs, который строит заглушка targetcli. В CI это отдельный workflow
+     `functional.yml` (+ job `API contract`). GitLab без privileged — там его нет.
 2. `api: write operations, async delete, TLS` — мутирующие эндпоинты,
    202/операции, 409/confirm, идемпотентность, асинхронный delete в демоне
    (+ `--no-wait`), TCP + TLS + mTLS/токены, аудит.

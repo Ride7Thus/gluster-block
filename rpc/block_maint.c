@@ -1081,7 +1081,7 @@ blockHostMaintRun(blockHostMaintCli *blk)
   if (!glfs) {
     goto initfail;
   }
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
     goto initfail;
   }

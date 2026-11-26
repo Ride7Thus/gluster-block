@@ -1,0 +1,17 @@
+# Settings of gluster-block-apid, the HTTP API of gluster-block, read by
+# gluster-block-apid.service (and by gluster-block-apid itself when it is
+# started by hand). Restart the service after a change.
+
+# Unix socket of the API. It is created with mode 0600 for root: the socket
+# is the access control, the Cockpit plugin connects to it as superuser.
+#GB_API_SOCKET="/run/gluster-block/api.sock"
+
+# Supported loglevels [ NONE, ERROR, WARNING, INFO, DEBUG ], the log file is
+# gluster-block-apid.log in GB_API_LOG_DIR
+#GB_API_LOG_LEVEL=INFO
+#GB_API_LOG_DIR="/var/log/gluster-block"
+
+# Seconds to wait for gluster-blockd to answer one request. gluster-blockd
+# serves its local requests one by one, so a slow one (hosts with a host
+# down) delays the others.
+#GB_API_DAEMON_TIMEOUT=120

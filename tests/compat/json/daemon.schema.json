@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "gluster-block/daemon.schema.json",
+  "title": "JSON answers of gluster-blockd (gluster-block ... --json)",
+  "description": "gluster-block-apid builds API v1 from these answers. A field listed here must keep its name and type: removing, renaming or retyping it breaks gluster-block-apid and scripts. New fields may be added. Checked by tests/functional/test_api.py against the real output.",
+
+  "definitions": {
+    "error": {
+      "type": "object",
+      "required": ["RESULT", "errCode", "errMsg"],
+      "properties": {
+        "RESULT": {"const": "FAIL"},
+        "errCode": {"type": "integer"},
+        "errMsg": {"type": "string"}
+      }
+    },
+
+    "strings": {"type": "array", "items": {"type": "string"}},
+
+    "version": {
+      "type": "object",
+      "required": ["VERSION", "CLI-RPC-REV", "CAPABILITIES", "RESULT"],
+      "properties": {
+        "VERSION": {"type": "string"},
+        "CLI-RPC-REV": {"type": "integer"},
+        "CAPABILITIES": {"$ref": "#/definitions/strings"},
+        "RESULT": {"const": "SUCCESS"}
+      }
+    },
+
+    "version_volume": {
+      "allOf": [{"$ref": "#/definitions/version"}],
+      "required": ["VOLUME", "HOSTS", "COMMON-CAPABILITIES"],
+      "properties": {
+        "VOLUME": {"type": "string"},
+        "COMMON-CAPABILITIES": {"$ref": "#/definitions/strings"},
+        "HOSTS": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["HOST", "DAEMON", "VERSION", "CAPABILITIES", "ERROR"],
+            "properties": {
+              "HOST": {"type": "string"},
+              "DAEMON": {"type": "string"},
+              "VERSION": {"type": "string"},
+              "CAPABILITIES": {"$ref": "#/definitions/strings"},
+              "ERROR": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "volumes": {
+      "type": "object",
+      "required": ["VOLUMES", "RESULT"],
+      "properties": {
+        "RESULT": {"const": "SUCCESS"},
+        "VOLUMES": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["NAME", "TYPE", "STATUS", "BRICK-COUNT", "BRICKS", "BLOCK-HOSTING", "ERROR"],
+            "properties": {
+              "NAME": {"type": "string"},
+              "TYPE": {"type": "string"},
+              "STATUS": {"type": "string"},
+              "BRICK-COUNT": {"type": "string"},
+              "BRICKS": {"$ref": "#/definitions/strings"},
+              "BLOCK-HOSTING": {"type": ["boolean", "null"]},
+              "BLOCKS": {"type": "integer"},
+              "ERROR": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "list": {
+      "type": "object",
+      "required": ["blocks", "RESULT"],
+      "properties": {
+        "blocks": {"$ref": "#/definitions/strings"},
+        "RESULT": {"const": "SUCCESS"}
+      }
+    },
+
+    "info": {
+      "type": "object",
+      "required": ["NAME", "VOLUME", "GBID", "SIZE", "HA", "PASSWORD", "EXPORTED ON",
+                   "SIZE-BYTES", "PRIO-PATH", "RING-BUFFER-MB", "BLOCK-SIZE",
+                   "IO-TIMEOUT-SEC", "PREALLOC", "ENTRY", "HOST-STATES"],
+      "properties": {
+        "NAME": {"type": "string"},
+        "VOLUME": {"type": "string"},
+        "GBID": {"type": "string"},
+        "SIZE": {"type": "string"},
+        "HA": {"type": "integer"},
+        "PASSWORD": {"type": "string"},
+        "EXPORTED ON": {"$ref": "#/definitions/strings"},
+        "ENCOUNTERED FAILURES ON": {"$ref": "#/definitions/strings"},
+        "RESIZE FAILED ON": {"type": "object", "additionalProperties": {"type": "string"}},
+        "SIZE-BYTES": {"type": "integer"},
+        "PRIO-PATH": {"type": "string"},
+        "RING-BUFFER-MB": {"type": "integer"},
+        "BLOCK-SIZE": {"type": "integer"},
+        "IO-TIMEOUT-SEC": {"type": "integer"},
+        "PREALLOC": {"type": ["string", "null"]},
+        "ENTRY": {"type": "string"},
+        "HOST-STATES": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["HOST", "STATE", "EXPORTED"],
+            "properties": {
+              "HOST": {"type": "string"},
+              "STATE": {"type": "string"},
+              "EXPORTED": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+
+    "host": {
+      "type": "object",
+      "required": ["HOST", "DAEMON", "BLOCKS", "PRIO-PATHS", "STATE", "PROBLEMS"],
+      "properties": {
+        "HOST": {"type": "string"},
+        "DAEMON": {"type": "string"},
+        "VERSION": {"type": "string"},
+        "TCMU-RUNNER": {"type": "string"},
+        "TARGET": {"type": "string"},
+        "BLOCKS": {"type": "integer"},
+        "LOADED": {"type": "integer"},
+        "TPG-ENABLED": {"type": "integer"},
+        "PRIO-PATHS": {"type": "integer"},
+        "STATE": {"type": "string"},
+        "PROBLEMS": {"$ref": "#/definitions/strings"},
+        "BLOCK-LIST": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["NAME", "GBID", "META", "PRIO", "PROBLEM"],
+            "properties": {
+              "NAME": {"type": "string"},
+              "GBID": {"type": "string"},
+              "META": {"type": "string"},
+              "PRIO": {"type": "boolean"},
+              "BACKSTORE": {"type": "boolean"},
+              "TPG": {"type": "integer"},
+              "TPG-ENABLED": {"type": "boolean"},
+              "ALUA": {"type": "string"},
+              "SCSI-CMDS": {"type": "integer"},
+              "READ-MB": {"type": "integer"},
+              "WRITE-MB": {"type": "integer"},
+              "SESSIONS": {"$ref": "#/definitions/strings"},
+              "PROBLEM": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "hosts": {
+      "type": "object",
+      "required": ["VOLUME", "HOSTS", "HEALTHY", "RESULT"],
+      "properties": {
+        "VOLUME": {"type": "string"},
+        "HOSTS": {"type": "array", "items": {"$ref": "#/definitions/host"}},
+        "HEALTHY": {"type": "boolean"},
+        "RESULT": {"const": "SUCCESS"}
+      }
+    },
+
+    "operation": {
+      "type": "object",
+      "required": ["OPERATION", "OPERATION-ID", "NAME", "GBID", "NODE", "STATE",
+                   "PHASE", "SIZE", "STARTED", "UPDATED", "FINISHED", "errCode", "errMsg"],
+      "properties": {
+        "OPERATION": {"type": "string"},
+        "OPERATION-ID": {"type": "string"},
+        "NAME": {"type": "string"},
+        "GBID": {"type": "string"},
+        "NODE": {"type": "string"},
+        "STATE": {"enum": ["IN-PROGRESS", "SUCCESS", "FAIL", "INTERRUPTED"]},
+        "PHASE": {"type": "string"},
+        "SIZE": {"type": "integer"},
+        "ALLOCATED": {"type": "string"},
+        "STEP": {"type": "string"},
+        "STEP-DONE": {"type": "integer"},
+        "STEP-TOTAL": {"type": "integer"},
+        "STEP-PERCENT": {"type": "integer"},
+        "REMAINING-SEC": {"type": "integer"},
+        "STARTED": {"type": "integer"},
+        "UPDATED": {"type": "integer"},
+        "FINISHED": {"type": "integer"},
+        "errCode": {"type": "integer"},
+        "errMsg": {"type": "string"}
+      }
+    },
+
+    "status": {
+      "type": "object",
+      "required": ["VOLUME", "STATUS", "RESULT"],
+      "properties": {
+        "VOLUME": {"type": "string"},
+        "STATUS": {"enum": ["IDLE", "BUSY"]},
+        "OPERATION": {"$ref": "#/definitions/operation"},
+        "LAST-OPERATION": {"$ref": "#/definitions/operation"},
+        "RESULT": {"const": "SUCCESS"}
+      }
+    },
+
+    "accepted": {
+      "type": "object",
+      "required": ["OPERATION-ID", "OPERATION", "NAME", "VOLUME", "RESULT"],
+      "properties": {
+        "OPERATION-ID": {"type": "string"},
+        "OPERATION": {"type": "string"},
+        "NAME": {"type": "string"},
+        "VOLUME": {"type": "string"},
+        "RESULT": {"const": "IN-PROGRESS"}
+      }
+    }
+  }
+}

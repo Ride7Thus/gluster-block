@@ -10,7 +10,8 @@ UNITDIR := $(shell pkg-config --variable=systemdsystemunitdir systemd)
 
 # upgrade_activities.sh calls /usr/libexec/gluster-block/wait-for-bricks.sh
 override_dh_auto_configure:
-	dh_auto_configure -- --with-systemddir=$(UNITDIR) --libexecdir=/usr/libexec
+	dh_auto_configure -- --with-systemddir=$(UNITDIR) --libexecdir=/usr/libexec \
+		--disable-api
 
 # like the RPMs: install the units, do not enable or start them; an upgrade
 # does not stop them either, debian/postinst restarts only gluster-blockd

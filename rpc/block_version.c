@@ -9,7 +9,15 @@
 */
 
 
+# include  "config.h"
 # include  "block_common.h"
+# include  "block_ha.h"
+
+
+const char *const gbOldCapabilities[] = {
+  "create", "create_ha", "create_prealloc", "create_auth",
+  "delete", "delete_force", "modify", "modify_auth", "json", NULL
+};
 
 
 static bool *
@@ -125,6 +133,8 @@ glusterBlockBuildMinCaps(void *data, operations opt)
   case HOSTS_SRV:
   case REBALANCE_SRV:
   case HOST_TPG_SRV:
+  case VERSION_CLI_SRV:
+  case VOLUMES_SRV:
     break;
   }
 
@@ -405,5 +415,133 @@ block_version_1_svc(void *data, blockResponse *reply, struct svc_req *rqstp)
   int ret;
 
   GB_RPC_CALL(version, data, reply, rqstp, ret);
+  return ret;
+}
+
+
+static void
+gbVersionPlainList(char **out, const char *label, json_object *arr)
+{
+  size_t i, n = arr ? json_object_array_length(arr) : 0;
+  char *tmp;
+
+
+  if (GB_ASPRINTF(&tmp, "%s%s:", *out ? *out : "", label) == -1) {
+    return;
+  }
+  GB_FREE(*out);
+  *out = tmp;
+  for (i = 0; i < n; i++) {
+    if (GB_ASPRINTF(&tmp, "%s %s", *out,
+        json_object_get_string(json_object_array_get_idx(arr, i))) == -1) {
+      return;
+    }
+    GB_FREE(*out);
+    *out = tmp;
+  }
+  if (GB_ASPRINTF(&tmp, "%s\n", *out) != -1) {
+    GB_FREE(*out);
+    *out = tmp;
+  }
+}
+
+
+/*
+ * 'gluster-block version [<volume>]': version of this gluster-blockd, the
+ * revision of its cli RPC program and its capabilities; with a volume also
+ * those of every host of the volume (see blockVolumeHostsCaps()).
+ */
+static blockResponse *
+block_version_cli_1_svc_st(blockVersionCli *blk, struct svc_req *rqstp)
+{
+  blockResponse *reply = NULL;
+  json_object *jo, *jcaps, *jhosts = NULL;
+  char *out = NULL, *tmp;
+  int errCode = 0;
+  char *errMsg = NULL;
+  size_t i, n;
+
+
+  LOG("mgmt", GB_LOG_INFO, "version cli request, volume=%s",
+      blk->volume[0] ? blk->volume : "-");
+
+  if (GB_ALLOC(reply) < 0) {
+    return NULL;
+  }
+
+  jo = json_object_new_object();
+  json_object_object_add(jo, "VERSION", GB_JSON_OBJ_TO_STR(PACKAGE_VERSION));
+  json_object_object_add(jo, "CLI-RPC-REV", json_object_new_int(GB_CLI_RPC_REV));
+  jcaps = json_object_new_array();
+  for (i = 0; i < GB_CAP_MAX; i++) {
+    if (globalCapabilities[i].status) {
+      json_object_array_add(jcaps, GB_JSON_OBJ_TO_STR(globalCapabilities[i].cap));
+    }
+  }
+  json_object_object_add(jo, "CAPABILITIES", jcaps);
+
+  if (blk->volume[0] &&
+      blockVolumeHostsCaps(blk->volume, jo, &errCode, &errMsg)) {
+    if (!errCode) {
+      errCode = GB_DEFAULT_ERRCODE;
+    }
+    json_object_put(jo);
+    blockFormatErrorResponse(VERSION_CLI_SRV, blk->json_resp, errCode,
+                             errMsg ? errMsg : GB_DEFAULT_ERRMSG, reply);
+    GB_FREE(errMsg);
+    return reply;
+  }
+
+  if (blk->json_resp) {
+    json_object_object_add(jo, "RESULT", GB_JSON_OBJ_TO_STR("SUCCESS"));
+    GB_ASPRINTF(&reply->out, "%s\n", json_object_to_json_string_ext(jo,
+                mapJsonFlagToJsonCstring(blk->json_resp)));
+  } else {
+    GB_ASPRINTF(&out, "VERSION: %s\nCLI-RPC-REV: %d\n", PACKAGE_VERSION,
+                GB_CLI_RPC_REV);
+    gbVersionPlainList(&out, "CAPABILITIES", jcaps);
+    if (json_object_object_get_ex(jo, "HOSTS", &jhosts)) {
+      json_object *jcommon = NULL;
+
+      n = json_object_array_length(jhosts);
+      for (i = 0; i < n; i++) {
+        json_object *jh = json_object_array_get_idx(jhosts, i);
+        json_object *v;
+        const char *host = "", *daemon = "", *version = "";
+
+        if (json_object_object_get_ex(jh, "HOST", &v)) {
+          host = json_object_get_string(v);
+        }
+        if (json_object_object_get_ex(jh, "DAEMON", &v)) {
+          daemon = json_object_get_string(v);
+        }
+        if (json_object_object_get_ex(jh, "VERSION", &v)) {
+          version = json_object_get_string(v);
+        }
+        if (GB_ASPRINTF(&tmp, "%sHOST: %s %s %s\n", out ? out : "", host,
+                        daemon, version) != -1) {
+          GB_FREE(out);
+          out = tmp;
+        }
+      }
+      json_object_object_get_ex(jo, "COMMON-CAPABILITIES", &jcommon);
+      gbVersionPlainList(&out, "COMMON-CAPABILITIES", jcommon);
+    }
+    reply->out = out;
+  }
+  json_object_put(jo);
+  reply->exit = 0;
+
+  return reply;
+}
+
+
+bool_t
+block_version_cli_1_svc(blockVersionCli *blk, blockResponse *reply,
+                        struct svc_req *rqstp)
+{
+  int ret;
+
+  GB_RPC_CALL(version_cli, blk, reply, rqstp, ret);
   return ret;
 }

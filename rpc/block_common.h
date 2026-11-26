@@ -75,7 +75,9 @@ typedef enum operations {
   MODIFY_PRIO_SRV,
   REBALANCE_SRV,
   HOST_TPG_SRV,
-  HOST_MAINT_SRV
+  HOST_MAINT_SRV,
+  VERSION_CLI_SRV,
+  VOLUMES_SRV
 } operations;
 
 
@@ -204,6 +206,9 @@ void *glusterBlockDeleteRemote(void *data);
 
 int glusterBlockCleanUp(struct glfs *glfs, char *blockname, bool forcedel,
                         bool unlink, blockRemoteDeleteResp *drobj);
+
+/* capabilities of a gluster-blockd without BLOCK_VERSION, NULL terminated */
+extern const char *const gbOldCapabilities[];
 
 int glusterBlockCheckCapabilities(void* blk, operations opt,
                                   blockServerDefPtr list,

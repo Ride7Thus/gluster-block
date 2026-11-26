@@ -1,0 +1,20 @@
+[Unit]
+Description=gluster-block HTTP API (gluster-block-apid)
+# a bridge to the local gluster-blockd; it answers 503 while that is down
+Wants=gluster-blockd.service
+After=gluster-blockd.service
+
+[Service]
+Type=simple
+EnvironmentFile=-@sysconfigdir@/gluster-block-apid
+ExecStart=@prefix@/sbin/gluster-block-apid
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+# not in the I/O path: a restart only drops pending HTTP requests
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

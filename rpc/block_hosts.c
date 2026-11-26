@@ -101,6 +101,11 @@ typedef struct gbHost {
   size_t       nenabled;
   size_t       nprio;
   size_t       nproblems;
+
+  bool         wantCaps;       /* also ask the capabilities (BLOCK_VERSION) */
+  bool         capsKnown;
+  char       **caps;           /* names of the capabilities it supports */
+  size_t       ncaps;
 } gbHost;
 
 
@@ -506,6 +511,79 @@ block_host_status_1_svc(blockHostStatus *blk, blockResponse *reply,
  * ------------------------------------------------------------------------ */
 
 static void
+gbHostCapsFree(gbHost *h)
+{
+  size_t i;
+
+
+  for (i = 0; i < h->ncaps; i++) {
+    GB_FREE(h->caps[i]);
+  }
+  GB_FREE(h->caps);
+  h->ncaps = 0;
+  h->capsKnown = false;
+}
+
+
+static int
+gbHostCapsAdd(gbHost *h, const char *cap)
+{
+  if (GB_REALLOC_N(h->caps, h->ncaps + 1) < 0) {
+    return -1;
+  }
+  if (GB_STRDUP(h->caps[h->ncaps], cap) < 0) {
+    return -1;
+  }
+  h->ncaps++;
+  return 0;
+}
+
+
+/* capabilities of the host, on the connection of gbHostQuery() */
+static void
+gbHostQueryCaps(gbHost *h, CLIENT *clnt)
+{
+  blockResponse reply = {0,};
+  enum clnt_stat stat;
+  gbCapObj *caps;
+  size_t i, n;
+
+
+  stat = block_version_1(NULL, &reply, clnt);
+  if (stat == RPC_PROCUNAVAIL) {
+    /* older than capabilities: what every such version could do */
+    for (i = 0; gbOldCapabilities[i]; i++) {
+      if (gbHostCapsAdd(h, gbOldCapabilities[i])) {
+        gbHostCapsFree(h);
+        return;
+      }
+    }
+    h->capsKnown = true;
+    return;
+  }
+  if (stat != RPC_SUCCESS) {
+    LOG("mgmt", GB_LOG_WARNING, "%son host %s",
+        clnt_sperror(clnt, "capabilities call failed"), h->addr);
+    return;
+  }
+
+  caps = (gbCapObj *)reply.xdata.xdata_val;
+  n = reply.xdata.xdata_len / sizeof(gbCapObj);
+  for (i = 0; caps && i < n; i++) {
+    caps[i].cap[sizeof(caps[i].cap) - 1] = '\0';
+    if (caps[i].status && gbHostCapsAdd(h, caps[i].cap)) {
+      gbHostCapsFree(h);
+      break;
+    }
+  }
+  if (i == n) {
+    h->capsKnown = true;
+  }
+  clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+}
+
+
+static void
 gbHostsFree(gbHosts *hs)
 {
   size_t i;
@@ -515,6 +593,7 @@ gbHostsFree(gbHosts *hs)
     return;
   }
   for (i = 0; i < hs->nhosts; i++) {
+    gbHostCapsFree(&hs->hosts[i]);
     GB_FREE(hs->hosts[i].blocks);
   }
   GB_FREE(hs->hosts);
@@ -818,6 +897,9 @@ gbHostQuery(void *data)
     h->daemon = GB_HOST_OLD_VERSION;
     snprintf(h->error, sizeof(h->error),
              "gluster-blockd is too old to report the host status");
+    if (h->wantCaps) {
+      gbHostQueryCaps(h, clnt);
+    }
     goto out;
   }
   if (stat != RPC_SUCCESS) {
@@ -837,6 +919,9 @@ gbHostQuery(void *data)
     }
   }
   clnt_freeres(clnt, (xdrproc_t)xdr_blockResponse, (char *)&reply);
+  if (h->wantCaps && h->daemon == GB_HOST_UP) {
+    gbHostQueryCaps(h, clnt);
+  }
 
  out:
   free(blocks);
@@ -1347,23 +1432,29 @@ block_hosts_cli_1_svc_st(blockHostsCli *blk, struct svc_req *rqstp)
     goto optfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
-  if (!lkfd) {
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  if (!lkfd && errCode != ENOENT) {
     LOG("mgmt", GB_LOG_ERROR, "%s %s", FAILED_CREATING_META, blk->volume);
     goto optfail;
   }
 
-  GB_METALOCK_RO_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
+  if (lkfd) {
+    GB_METALOCK_RO_OR_GOTO(lkfd, blk->volume, errCode, errMsg, optfail);
 
-  gbHostsRead(glfs, blk->volume, &hs, &errCode, &errMsg);
-  for (i = 0; i < hs.nhosts; i++) {
-    blockHostStateGet(glfs, hs.hosts[i].addr, hs.hosts[i].state,
-                      sizeof(hs.hosts[i].state));
-  }
+    gbHostsRead(glfs, blk->volume, &hs, &errCode, &errMsg);
+    for (i = 0; i < hs.nhosts; i++) {
+      blockHostStateGet(glfs, hs.hosts[i].addr, hs.hosts[i].state,
+                        sizeof(hs.hosts[i].state));
+    }
 
-  GB_METAUNLOCK(lkfd, blk->volume, errCode, errMsg);
-  if (errCode) {
-    goto optfail;
+    GB_METAUNLOCK(lkfd, blk->volume, errCode, errMsg);
+    if (errCode) {
+      goto optfail;
+    }
+  } else {
+    /* the volume hosts no blocks: no hosts */
+    errCode = 0;
+    GB_FREE(errMsg);
   }
 
   if (blk->host[0]) {
@@ -1418,6 +1509,111 @@ block_hosts_cli_1_svc_st(blockHostsCli *blk, struct svc_req *rqstp)
   GB_FREE(errMsg);
 
   return reply;
+}
+
+
+/*
+ * 'version <volume>': add to @jo the version and the capabilities of every
+ * host of the volume (HOSTS) and the capabilities this daemon and all hosts
+ * that answer have (COMMON-CAPABILITIES). Hosts that do not answer are
+ * listed, they do not narrow the common capabilities.
+ */
+int
+blockVolumeHostsCaps(char *volume, json_object *jo, int *errCode,
+                     char **errMsg)
+{
+  struct glfs *glfs;
+  struct glfs_fd *lkfd = NULL;
+  gbHosts hs = {volume, 0, NULL};
+  json_object *jhosts, *jcommon;
+  bool *common = NULL;
+  size_t i, j, k;
+  int ret = -1;
+
+
+  glfs = glusterBlockVolumeInit(volume, errCode, errMsg);
+  if (!glfs) {
+    return -1;
+  }
+  lkfd = glusterBlockOpenMetaLockFile(glfs, volume, errCode, errMsg);
+  if (!lkfd && *errCode != ENOENT) {
+    return -1;
+  }
+  if (lkfd) {
+    GB_METALOCK_RO_OR_GOTO(lkfd, volume, *errCode, *errMsg, out);
+    gbHostsRead(glfs, volume, &hs, errCode, errMsg);
+    GB_METAUNLOCK(lkfd, volume, *errCode, *errMsg);
+    if (*errCode) {
+      goto out;
+    }
+  } else {
+    /* the volume hosts no blocks: no hosts, only this daemon */
+    *errCode = 0;
+    GB_FREE(*errMsg);
+  }
+
+  for (i = 0; i < hs.nhosts; i++) {
+    hs.hosts[i].wantCaps = true;
+  }
+  gbHostsQuery(&hs);
+
+  if (GB_ALLOC_N(common, GB_CAP_MAX) < 0) {
+    *errCode = ENOMEM;
+    goto out;
+  }
+  for (k = 0; k < GB_CAP_MAX; k++) {
+    common[k] = globalCapabilities[k].status;
+  }
+
+  jhosts = json_object_new_array();
+  for (i = 0; i < hs.nhosts; i++) {
+    gbHost *h = &hs.hosts[i];
+    json_object *jh = json_object_new_object();
+    json_object *jc = json_object_new_array();
+
+    json_object_object_add(jh, "HOST", GB_JSON_OBJ_TO_STR(h->addr));
+    json_object_object_add(jh, "DAEMON",
+                           GB_JSON_OBJ_TO_STR(gbHostDaemonLookup[h->daemon]));
+    json_object_object_add(jh, "VERSION", GB_JSON_OBJ_TO_STR(h->version));
+    for (j = 0; j < h->ncaps; j++) {
+      json_object_array_add(jc, GB_JSON_OBJ_TO_STR(h->caps[j]));
+    }
+    json_object_object_add(jh, "CAPABILITIES", jc);
+    json_object_object_add(jh, "ERROR", GB_JSON_OBJ_TO_STR(h->error));
+    json_object_array_add(jhosts, jh);
+
+    if (!h->capsKnown) {
+      continue;
+    }
+    for (k = 0; k < GB_CAP_MAX; k++) {
+      bool has = false;
+
+      for (j = 0; j < h->ncaps && !has; j++) {
+        has = !strcmp(h->caps[j], gbCapabilitiesLookup[k]);
+      }
+      common[k] = common[k] && has;
+    }
+  }
+
+  jcommon = json_object_new_array();
+  for (k = 0; k < GB_CAP_MAX; k++) {
+    if (common[k]) {
+      json_object_array_add(jcommon, GB_JSON_OBJ_TO_STR(gbCapabilitiesLookup[k]));
+    }
+  }
+  json_object_object_add(jo, "VOLUME", GB_JSON_OBJ_TO_STR(volume));
+  json_object_object_add(jo, "HOSTS", jhosts);
+  json_object_object_add(jo, "COMMON-CAPABILITIES", jcommon);
+  ret = 0;
+
+ out:
+  if (lkfd && glfs_close(lkfd) != 0) {
+    LOG("mgmt", GB_LOG_ERROR, "glfs_close(%s): on volume %s failed[%s]",
+        GB_TXLOCKFILE, volume, strerror(errno));
+  }
+  GB_FREE(common);
+  gbHostsFree(&hs);
+  return ret;
 }
 
 

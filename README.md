@@ -165,6 +165,16 @@ commands:
         rebalance spreads the prio paths again, force skips the
         tcmu-runner check. Runs in background.
 
+  volumes
+        gluster volumes of the cluster: type, status, bricks and the
+        number of block devices of the volumes that host them.
+
+  version [<volname>]
+        alone the version of the cli; with --json* or a volume the
+        version, cli RPC revision and capabilities of gluster-blockd,
+        with a volume also of every host of the volume and the
+        capabilities all hosts that answer share.
+
   info    <volname/blockname>
         details about block device.
 
@@ -188,9 +198,6 @@ commands:
 
   help
         show this message and exit.
-
-  version
-        show version info and exit.
 
 common cli options: (fixed formats)
   timeout <seconds>
@@ -517,6 +524,76 @@ RESULT: SUCCESS
 </pre>
 
 <b>NOTE:</b> gluster-block cannot track iSCSI targets created manually using targetcli.
+
+##### Volumes and versions
+
+`volumes` lists the gluster volumes with their type, status and bricks; for
+the started ones it tells whether they host block devices and how many. A
+volume hosts blocks once the first block is created on it: only `create`
+makes the metadata, `list` and `hosts` show nothing on another volume and
+the other commands answer that the block does not exist.
+<pre>
+<b># gluster-block volumes</b>
+VOLUME                   TYPE                     STATUS   BLOCKS   BRICKS
+hosting-volume           Replicate                Started  2        1 x 3 = 3
+ec-volume                Disperse                 Started  -        1 x (2 + 1) = 3
+</pre>
+
+`version` alone prints the version of the cli. With a volume (or `--json`) it
+asks gluster-blockd: its version, the revision of its cli RPC program (what
+gluster-block-apid checks) and its capabilities, with a volume also those of
+every host of the volume and the capabilities all hosts that answer share. A
+host that does not answer is listed, it does not narrow the common ones.
+<pre>
+<b># gluster-block version hosting-volume</b>
+VERSION: 0.5.34
+CLI-RPC-REV: 16
+CAPABILITIES: create create_ha create_prealloc create_auth delete ... host_maintenance
+HOST: 192.168.1.11 up 0.5.34
+HOST: 192.168.1.12 up 0.5.34
+HOST: 192.168.1.13 up 0.5.33
+COMMON-CAPABILITIES: create create_ha create_prealloc ... host_maintenance
+</pre>
+
+### HTTP API
+
+The `gluster-block-api` package (EL only for now) has `gluster-block-apid`, a
+bridge between HTTP clients and the local gluster-blockd. The Cockpit plugin
+uses it; any node can be asked, its gluster-blockd coordinates the other
+hosts of a block as it does for the cli. The API is described in
+[docs/api/openapi.yaml](docs/api/openapi.yaml) (installed with the package):
+JSON with snake_case keys, sizes in bytes, `null` for what is unknown, errors
+as `{"error": {"code", "message", "errno"}}` with the HTTP status of the
+errno (404 not found, 409 exists or needs a confirmation, 423 the volume is
+busy with another operation, 502 a host does not answer, 503 gluster-blockd
+does not answer or is older than gluster-block-apid). API v1 only changes
+compatibly, CI checks it.
+
+It listens on the unix socket `/run/gluster-block/api.sock`, mode 0600 for
+root: the socket is the access control. Settings are in
+`/etc/sysconfig/gluster-block-apid`, the log is
+`/var/log/gluster-block/gluster-block-apid.log`.
+<pre>
+<b># systemctl enable --now gluster-block-apid</b>
+<b># curl -s --unix-socket /run/gluster-block/api.sock http://localhost/api/v1/volumes/hosting-volume/blocks/block-volume</b>
+{"name":"block-volume","volume":"hosting-volume","gbid":"6b60c53c-...","size_bytes":1073741824,"ha":3,
+ "prio_path":"192.168.1.11","exported_on":["192.168.1.11","192.168.1.12","192.168.1.13"],...}
+</pre>
+
+Read-only endpoints, all under `/api/v1`:
+
+| Endpoint | |
+|---|---|
+| `GET /version[?volume=<vol>]` | versions, capabilities and the `features` a client may offer |
+| `GET /volumes`, `/volumes/<vol>` | gluster volumes |
+| `GET /volumes/<vol>/blocks[?detail=1]`, `/blocks/<block>` | block devices |
+| `GET /volumes/<vol>/hosts`, `/hosts/<host>` | state of the hosts, of each block on a host |
+| `GET /volumes/<vol>/operations`, `/operations/<id>` | long operations, poll one until it is no longer `running` |
+| `GET /healthz` | 200 when gluster-blockd answers and is compatible |
+
+A restarted gluster-blockd of an older version is refused with 503
+`daemon_incompatible` until it is upgraded: both come from the same build,
+an upgrade of the packages restarts both.
 
 ------
 

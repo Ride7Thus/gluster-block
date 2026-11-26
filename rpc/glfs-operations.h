@@ -88,9 +88,15 @@ glusterBlockResizeEntry(struct glfs *glfs, blockModifySize *blk, int *errCode,
 int
 glusterBlockDeleteEntry(struct glfs *glfs, char *volume, char *gbid);
 
+/* create only: makes the metadata directory and the lock file */
 struct glfs_fd *
 glusterBlockCreateMetaLockFile(struct glfs *glfs, char *volume, int *errCode,
                                char **errMsg);
+
+/* all other operations: ENOENT when the volume hosts no blocks */
+struct glfs_fd *
+glusterBlockOpenMetaLockFile(struct glfs *glfs, char *volume, int *errCode,
+                             char **errMsg);
 
 int
 glusterBlockDeleteMetaFile(struct glfs *glfs, char *volume, char *blockname);

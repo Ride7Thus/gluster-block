@@ -490,7 +490,7 @@ block_modify_cli_1_svc_st(blockModifyCli *blk, struct svc_req *rqstp)
     goto initfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
     LOG("mgmt", GB_LOG_ERROR, "%s %s for block %s",
         FAILED_CREATING_META, blk->volume, blk->block_name);
@@ -843,7 +843,7 @@ blockModifySizeCliRun(blockModifySizeCli *blk)
     goto initfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
     LOG("mgmt", GB_LOG_ERROR, "%s %s for block %s",
         FAILED_CREATING_META, blk->volume, blk->block_name);

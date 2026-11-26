@@ -12,4 +12,9 @@
   compress
   delaycompress
   notifempty
+
+# gluster-block-apid reopens its log on SIGHUP
+  postrotate
+    systemctl kill -s HUP gluster-block-apid.service >/dev/null 2>&1 || true
+  endscript
 }

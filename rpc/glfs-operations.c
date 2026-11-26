@@ -728,6 +728,48 @@ glusterBlockCreateMetaLockFile(struct glfs *glfs, char *volume, int *errCode,
   return NULL;
 }
 
+/*
+ * The lock file of a volume that hosts blocks, for every operation but
+ * create: nothing is created on a volume without the metadata directory.
+ * NULL and ENOENT then ("volume ... hosts no block devices").
+ */
+struct glfs_fd *
+glusterBlockOpenMetaLockFile(struct glfs *glfs, char *volume, int *errCode,
+                             char **errMsg)
+{
+  struct glfs_fd *lkfd;
+
+
+  if (glfs_chdir(glfs, GB_METADIR)) {
+    *errCode = errno;
+    if (*errCode == ENOENT) {
+      LOG("gfapi", GB_LOG_DEBUG, "volume %s has no %s", volume, GB_METADIR);
+      GB_ASPRINTF(errMsg, "volume %s hosts no block devices", volume);
+      return NULL;
+    }
+    LOG("gfapi", GB_LOG_ERROR, "glfs_chdir(%s) on volume %s failed[%s]",
+        GB_METADIR, volume, strerror(*errCode));
+    goto out;
+  }
+
+  /* the directory exists: the volume hosts blocks, the lock may be made */
+  lkfd = glfs_creat(glfs, GB_TXLOCKFILE, O_RDWR, S_IRUSR | S_IWUSR);
+  if (!lkfd) {
+    *errCode = errno;
+    LOG("gfapi", GB_LOG_ERROR, "glfs_creat(%s) on volume %s failed[%s]",
+        GB_TXLOCKFILE, volume, strerror(*errCode));
+    goto out;
+  }
+
+  return lkfd;
+
+ out:
+  GB_ASPRINTF(errMsg, "Not able to open Metadata on volume %s[%s]", volume,
+              strerror(*errCode));
+  return NULL;
+}
+
+
 int
 glusterBlockDeleteMetaFile(struct glfs *glfs,
                                char *volume, char *blockname)

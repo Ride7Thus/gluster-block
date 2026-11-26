@@ -47,8 +47,17 @@ block_list_cli_1_svc_st(blockListCli *blk, struct svc_req *rqstp)
     goto optfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
+    if (errCode == ENOENT) {
+      /* no metadata directory: no blocks, and listing creates nothing */
+      errCode = 0;
+      GB_FREE(errMsg);
+      if (blk->json_resp) {
+        json_object_object_add(json_obj, "blocks", json_array);
+      }
+      goto optfail;
+    }
     LOG("mgmt", GB_LOG_ERROR, "%s %s", FAILED_CREATING_META, blk->volume);
     goto optfail;
   }

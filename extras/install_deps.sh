@@ -51,4 +51,4 @@ esac
 
 $SUDO dnf install -y git gcc make autoconf automake libtool file rpm-build \
 	glusterfs-api-devel json-c-devel libuuid-devel libtirpc-devel rpcgen \
-	systemd selinux-policy-devel bzip2 findutils python3
+	systemd selinux-policy-devel bzip2 findutils python3 libmicrohttpd-devel

@@ -123,6 +123,11 @@ int blockHostServices(const char *volume, const char *addr, char *tcmu,
                       size_t tlen, char *err, size_t elen);
 
 
+/* 'version <volume>': HOSTS and COMMON-CAPABILITIES of the volume into @jo */
+int blockVolumeHostsCaps(char *volume, json_object *jo, int *errCode,
+                         char **errMsg);
+
+
 /* I/O through the LUN of a block on one host, see blockHostLunIo() */
 typedef struct gbLunIo {
   char   name[255];             /* in */

@@ -76,6 +76,27 @@ blockInfoCliFormatResponse(blockInfoCli *blk, int errCode,
     json_object_object_add(json_obj, "IOTIMEOUT", GB_JSON_OBJ_TO_STR(timeout));
     json_object_object_add(json_obj, "PASSWORD", GB_JSON_OBJ_TO_STR(info->passwd));
 
+    /* machine readable details, for gluster-block-apid and scripts */
+    json_object_object_add(json_obj, "SIZE-BYTES", json_object_new_int64(info->size));
+    json_object_object_add(json_obj, "PRIO-PATH", GB_JSON_OBJ_TO_STR(info->prio_path));
+    json_object_object_add(json_obj, "RING-BUFFER-MB", json_object_new_int64(info->rb_size));
+    json_object_object_add(json_obj, "BLOCK-SIZE", json_object_new_int64(info->blk_size));
+    json_object_object_add(json_obj, "IO-TIMEOUT-SEC", json_object_new_int64(info->io_timeout));
+    json_object_object_add(json_obj, "PREALLOC", info->alloc_known ?
+                           GB_JSON_OBJ_TO_STR(info->prealloc ? "full" : "no") : NULL);
+    json_object_object_add(json_obj, "ENTRY", GB_JSON_OBJ_TO_STR(info->entry));
+    json_array1 = json_object_new_array();
+    for (i = 0; i < info->nhosts; i++) {
+      json_object *jh = json_object_new_object();
+
+      json_object_object_add(jh, "HOST", GB_JSON_OBJ_TO_STR(info->list[i]->addr));
+      json_object_object_add(jh, "STATE", GB_JSON_OBJ_TO_STR(info->list[i]->status));
+      json_object_object_add(jh, "EXPORTED",
+                             json_object_new_boolean(blockhostIsValid(info->list[i]->status)));
+      json_object_array_add(json_array1, jh);
+    }
+    json_object_object_add(json_obj, "HOST-STATES", json_array1);
+
     json_array1 = json_object_new_array();
 
     for (i = 0; i < info->nhosts; i++) {
@@ -236,8 +257,14 @@ block_info_cli_1_svc_st(blockInfoCli *blk, struct svc_req *rqstp)
     goto optfail;
   }
 
-  lkfd = glusterBlockCreateMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
+  lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
+    if (errCode == ENOENT) {
+      GB_FREE(errMsg);
+      GB_ASPRINTF(&errMsg, "block %s/%s doesn't exist", blk->volume,
+                  blk->block_name);
+      goto optfail;
+    }
     LOG("mgmt", GB_LOG_ERROR, "%s %s for block %s",
         FAILED_CREATING_META, blk->volume, blk->block_name);
     goto optfail;
