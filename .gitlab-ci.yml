@@ -29,6 +29,8 @@ variables:
     - ./autogen.sh
     - ./configure CFLAGS="-O2 -g -Wall -Werror -Wno-unused-but-set-variable"
     - make -j"$(nproc)"
+    # RPC compatibility with the released versions (tests/compat)
+    - make check || { cat tests/test-suite.log; exit 1; }
     - make distclean
     - extras/make_rpms.sh
     - mkdir -p "rpms/$DISTRO"
@@ -85,6 +87,8 @@ rpm:centos-stream-9:
     - ./autogen.sh
     - ./configure CFLAGS="-O2 -g -Wall -Werror -Wno-unused-but-set-variable"
     - make -j"$(nproc)"
+    # RPC compatibility with the released versions (tests/compat)
+    - make check || { cat tests/test-suite.log; exit 1; }
     - make distclean
     - extras/make_debs.sh
     - mkdir -p "debs/$DISTRO"

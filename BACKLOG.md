@@ -49,3 +49,20 @@ prio paths of the volume to the remaining hosts on its own, then rebalance
 them again once the host is back.
 
 Wait until the manual maintenance has been run on a real cluster.
+
+### 5. Host weight for prio paths (later)
+
+Today a path is either the prio path (`glfs_tg_pt_gp_ao`) or not. A weight
+per host of a block hosting volume (`hosts <volname> <host> weight
+<0..100>`, kept in `hosts.info`) would let `rebalance` give more prio paths
+to stronger hosts and none to a host with weight 0. Decided on 2026-11-26 to
+keep the binary AO/ANO model in branch `cockpit-plugin`.
+
+## Management API and Cockpit (branch `cockpit-plugin`)
+
+Plan: `cockpit/PLAN.md`. Later:
+
+- Kubernetes: a CSI driver (controller on top of the HTTP API of
+  `gluster-block-apid`, node plugin doing the iSCSI login and multipath) or
+  an operator.
+- Debian/Ubuntu packages of `gluster-block-apid` and the Cockpit plugin.

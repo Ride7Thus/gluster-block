@@ -16,7 +16,7 @@ debian|ubuntu)
 	$SUDO apt-get update
 	$SUDO apt-get install -y git gcc make autoconf automake libtool file \
 		pkgconf rpcsvc-proto libtirpc-dev uuid-dev libjson-c-dev \
-		libglusterfs-dev systemd debhelper dpkg-dev
+		libglusterfs-dev systemd debhelper dpkg-dev python3
 	# systemd.pc moved to systemd-dev in Debian 13 and Ubuntu 24.04
 	if apt-cache show systemd-dev >/dev/null 2>&1; then
 		$SUDO apt-get install -y systemd-dev
@@ -51,4 +51,4 @@ esac
 
 $SUDO dnf install -y git gcc make autoconf automake libtool file rpm-build \
 	glusterfs-api-devel json-c-devel libuuid-devel libtirpc-devel rpcgen \
-	systemd selinux-policy-devel bzip2 findutils
+	systemd selinux-policy-devel bzip2 findutils python3
