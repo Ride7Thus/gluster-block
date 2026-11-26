@@ -1,3 +1,39 @@
+gluster-block release 0.5.33
+============================
+
+The patch number counts the problems solved since 0.5.1 (32).
+Host maintenance: take one host of a block hosting volume out of service
+and back without I/O errors on the initiators. All hosts of a volume need
+this version for the new commands (capabilities modify_prio and
+host_maintenance).
+
+Features:
+---------
+27. 'gluster-block hosts <volname> [<host>]': state of the hosts of a
+    volume read from configfs of every host: gluster-blockd, tcmu-runner,
+    loaded blocks, enabled TPGs, prio paths, logged in initiators and
+    problems; a dead host is reported after 3 seconds.
+28. 'gluster-block modify <volname/blockname> prio-path <host> [force]':
+    move the active/optimized ALUA path of a block to another of its
+    hosts, put back on all hosts if one fails.
+29. 'gluster-block hosts <volname> rebalance [dry-run]': spread the prio
+    paths of a volume over the hosts that answer, in background.
+30. 'gluster-block hosts <volname> <host> maintenance start [force]' and
+    'maintenance stop [force] [rebalance]': move the prio paths off the
+    host, disable its TPGs (kept over a reboot), bring it back; create,
+    replace and prio-path onto a host in maintenance are refused.
+31. maintenance start waits until the initiators do no more I/O through
+    the LUNs of the host (GB_MAINT_IO_IDLE_SEC, GB_MAINT_IO_WAIT_SEC)
+    and stops if they do not; force asks for a confirmation that lists
+    what it skips.
+
+Fixes:
+------
+32. an RPM upgrade restarted gluster-block-target: 'targetctl clear'
+    dropped every iSCSI session of the host. Upgrades (also from 0.5.27)
+    now restart only gluster-blockd, on RPM and .deb.
+
+
 gluster-block release 0.5.27
 ============================
 

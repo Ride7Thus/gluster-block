@@ -359,12 +359,32 @@ glusterBlockCallRPC_1(char *host, void *cobj,
       goto out;
     }
     break;
+  case HOST_TPG_SRV:
+    *rpc_sent = TRUE;
+    if (block_host_tpg_1((blockHostTpg *)cobj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("mgmt", GB_LOG_ERROR, "%son host %s",
+          clnt_sperror(clnt, "block remote host tpg call failed"), host);
+      goto out;
+    }
+    break;
+  case MODIFY_PRIO_SRV:
+    *rpc_sent = TRUE;
+    if (block_modify_prio_1((blockModifyPrio *)cobj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("mgmt", GB_LOG_ERROR, "%son host %s",
+          clnt_sperror(clnt, "block remote modify prio call failed"), host);
+      goto out;
+    }
+    break;
   case MODIFY_TPGC_SRV:
   case LIST_SRV:
   case INFO_SRV:
   case REPLACE_GET_PORTAL_TPG_SRV:
   case GENCONFIG_SRV:
   case STATUS_SRV:
+  case HOST_STATUS_SRV:
+  case HOSTS_SRV:
+  case REBALANCE_SRV:
+  case HOST_MAINT_SRV:
       goto out;
   case REPLACE_SRV:
       *rpc_sent = TRUE;

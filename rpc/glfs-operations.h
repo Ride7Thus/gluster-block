@@ -72,6 +72,9 @@ void
 blockOpStep(const char *step, size_t total, bool byAlloc, size_t base);
 
 void
+blockOpStepCount(const char *step, size_t total);
+
+void
 blockOpStepProgress(size_t done);
 
 int

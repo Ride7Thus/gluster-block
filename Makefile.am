@@ -8,12 +8,12 @@ noinst_HEADERS = version.h config.h
 
 CLEANFILES = *~ gluster-block.spec
 
-EXTRA_DIST = autogen.sh version-gen.sh README.md COPYING-GPLV2 COPYING-LGPLV3 \
+EXTRA_DIST = autogen.sh version-gen.sh README.md BACKLOG.md COPYING-GPLV2 COPYING-LGPLV3 \
 						 gluster-block.spec INSTALL NEWS \
 						 selinux/gluster_block.te selinux/gluster_block.fc \
 						 selinux/gluster_block.if \
 						 debian/control debian/rules debian/copyright \
-						 debian/source/format
+						 debian/postinst debian/source/format
 
 if USE_SYSTEMD
 RPM_WITH_FLAGS = --with systemd

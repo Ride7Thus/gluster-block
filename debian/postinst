@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+# On upgrade restart the management daemon if it runs, it is not in the I/O
+# path. gluster-block-target is not restarted: its stop runs 'targetctl
+# clear', every iSCSI session of the host would drop.
+if [ "$1" = "configure" ] && [ -n "$2" ] && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl try-restart gluster-blockd.service || true
+fi
+
+exit 0

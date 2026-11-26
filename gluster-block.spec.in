@@ -121,6 +121,27 @@ fi
 %endif
 
 %if ( 0%{?_with_systemd:1} )
+# The %postun of the package being upgraded still restarts
+# gluster-block-target (try-restart on EL8, a needs-restart marker on EL9)
+# up to 0.5.27. Refuse that restart for the transaction: a runtime drop-in
+# makes the unit refuse manual stops, %posttrans removes it and the marker.
+%pre
+if [ $1 -ge 2 ] && [ -d /run/systemd/system ]; then
+    mkdir -p /run/systemd/system/gluster-block-target.service.d
+    printf '[Unit]\nRefuseManualStop=yes\n' > \
+        /run/systemd/system/gluster-block-target.service.d/50-upgrade.conf
+    systemctl daemon-reload >/dev/null 2>&1 || :
+fi
+
+%posttrans
+if [ -f /run/systemd/system/gluster-block-target.service.d/50-upgrade.conf ]; then
+    systemctl set-property --runtime gluster-block-target.service \
+        Markers=-needs-restart >/dev/null 2>&1 || :
+    rm -f /run/systemd/system/gluster-block-target.service.d/50-upgrade.conf
+    rmdir /run/systemd/system/gluster-block-target.service.d 2>/dev/null || :
+    systemctl daemon-reload >/dev/null 2>&1 || :
+fi
+
 %post
 %systemd_post gluster-block-target.service
 %systemd_post gluster-blockd.service
@@ -131,7 +152,12 @@ fi
 find %{_sharedstatedir}/gluster-block/ -name 'gb_upgrade.status' -delete
 
 %postun
-%systemd_postun_with_restart gluster-block-target.service
+# Restarting gluster-block-target on upgrade runs 'targetctl clear' and
+# 'targetctl restore': every iSCSI session of the host drops and blocks with
+# ha 1 stop serving. An upgrade does not change the LIO configuration, the
+# new unit file takes effect with the daemon-reload of the macro; only the
+# management daemon is restarted, it is not in the I/O path.
+%systemd_postun gluster-block-target.service
 %systemd_postun_with_restart gluster-blockd.service
 %endif
 
@@ -170,6 +196,12 @@ rm -rf ${RPM_BUILD_ROOT}
 %endif
 
 %changelog
+* Wed Nov 25 2026 Ride7Thus - 0.5.33
+- Add hosts command: host state, rebalance and maintenance of a volume
+- Add modify prio-path to move the active/optimized path of a block
+- Wait for the I/O on the LUNs to stop before a host goes into maintenance
+- Do not restart gluster-block-target on upgrade
+
 * Tue Nov 24 2026 Ride7Thus - 0.5.27
 - Accept --help, --version and --usage as the command
 - Document block volumes on dispersed gluster volumes

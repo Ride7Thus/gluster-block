@@ -154,6 +154,61 @@ struct blockReplaceCli {
   enum JsonResponseFormat     json_resp;
 };
 
+struct blockModifyPrio {
+  char      volume[255];
+  char      block_name[255];
+  char      gbid[127];
+  char      prio_path[255];       /* host whose TPG gets the AO ALUA group */
+};
+
+struct blockModifyPrioCli {
+  char      volume[255];
+  char      block_name[255];
+  char      prio_path[255];
+  bool      force;                /* skip hosts that do not answer */
+  string    cmd<>;
+  enum JsonResponseFormat     json_resp;
+};
+
+struct blockRebalanceCli {
+  char      volume[255];
+  bool      dry_run;              /* show the moves, change nothing */
+  bool      async;                /* return IN-PROGRESS, finish in background */
+  string    cmd<>;
+  enum JsonResponseFormat     json_resp;
+};
+
+struct blockHostTpg {
+  char      volume[255];
+  char      host[255];            /* the host as written in the metadata */
+  string    blocks<>;             /* "<block_name> <gbid>\n" per block */
+  bool      enable;               /* enable or disable the TPG of the host */
+};
+
+struct blockHostMaintCli {
+  char      volume[255];
+  char      host[255];
+  bool      start;                /* start or stop the maintenance */
+  bool      force;                /* start: skip the checks and the I/O wait */
+  bool      confirmed;            /* the user accepted what force skips */
+  bool      rebalance;            /* stop: rebalance the prio paths after */
+  bool      async;                /* return IN-PROGRESS, finish in background */
+  string    cmd<>;
+  enum JsonResponseFormat     json_resp;
+};
+
+struct blockHostStatus {
+  char      volume[255];
+  char      host[255];            /* the host as written in the metadata */
+  string    blocks<>;             /* "<block_name> <gbid>\n" per block */
+};
+
+struct blockHostsCli {
+  char      volume[255];
+  char      host[255];            /* empty: all hosts of the volume */
+  enum JsonResponseFormat     json_resp;
+};
+
 struct blockGenConfigCli {
   string    volume<>;
   char      addr[255];
@@ -178,6 +233,9 @@ program GLUSTER_BLOCK {
 
     blockResponse BLOCK_CREATE_V2(blockCreate2) = 7;
     blockResponse BLOCK_RELOAD(blockReload) = 8;
+    blockResponse BLOCK_HOST_STATUS(blockHostStatus) = 9;
+    blockResponse BLOCK_MODIFY_PRIO(blockModifyPrio) = 10;
+    blockResponse BLOCK_HOST_TPG(blockHostTpg) = 11;
   } = 1;
 } = 21215311; /* B2 L12 O15 C3 K11 */
 
@@ -193,5 +251,9 @@ program GLUSTER_BLOCK_CLI {
     blockResponse BLOCK_GEN_CONFIG_CLI(blockGenConfigCli) = 8;
     blockResponse BLOCK_RELOAD_CLI(blockReloadCli) = 9;
     blockResponse BLOCK_STATUS_CLI(blockStatusCli) = 10;
+    blockResponse BLOCK_HOSTS_CLI(blockHostsCli) = 11;
+    blockResponse BLOCK_MODIFY_PRIO_CLI(blockModifyPrioCli) = 12;
+    blockResponse BLOCK_REBALANCE_CLI(blockRebalanceCli) = 13;
+    blockResponse BLOCK_HOST_MAINT_CLI(blockHostMaintCli) = 14;
   } = 1;
 } = 212153113; /* B2 L12 O15 C3 K11 C3 */

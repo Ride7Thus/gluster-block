@@ -171,3 +171,7 @@ reload: true
 # Since: 0.5
 ##
 create_io_timeout: true
+
+modify_prio: true
+
+host_maintenance: true
