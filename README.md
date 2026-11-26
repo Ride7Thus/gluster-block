@@ -117,9 +117,9 @@ gluster-block (0.4)
 usage:
   gluster-block [timeout <seconds>] [--wait] [--yes] <command> <volname[/blockname]> [<args>] [--json*]
 
-  create and modify size return as soon as the request is accepted
-  (RESULT: IN-PROGRESS) and finish in background, use 'status' to
-  track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the
+  create, delete and modify size return as soon as the request is
+  accepted (RESULT: IN-PROGRESS) and finish in background, use 'status'
+  to track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the
   result instead.
 
 commands:
@@ -204,8 +204,9 @@ common cli options: (fixed formats)
         it is the time in seconds that cli can wait for daemon to respond.
         [default: timeout 300]
   --wait
-        wait until a background create or modify size finishes and print
-        its result. [default: return RESULT: IN-PROGRESS at once]
+        wait until a background create, delete, modify size, rebalance
+        or maintenance finishes and print its result.
+        [default: return RESULT: IN-PROGRESS at once]
   --yes
         do not ask for confirmation, e.g. 'prealloc no' on a dispersed
         volume.
@@ -517,8 +518,8 @@ On client node
 # umount /mnt
 # iscsiadm -m node -u
 
-On the server node
-<b># gluster-block delete hosting-volume/block-volume</b>
+On the server node (delete runs in background like create, --wait waits)
+<b># gluster-block --wait delete hosting-volume/block-volume</b>
 SUCCESSFUL ON: 192.168.1.11 192.168.1.12 192.168.1.13
 RESULT: SUCCESS
 </pre>
@@ -547,7 +548,7 @@ host that does not answer is listed, it does not narrow the common ones.
 <pre>
 <b># gluster-block version hosting-volume</b>
 VERSION: 0.5.34
-CLI-RPC-REV: 16
+CLI-RPC-REV: 17
 CAPABILITIES: create create_ha create_prealloc create_auth delete ... host_maintenance
 HOST: 192.168.1.11 up 0.5.34
 HOST: 192.168.1.12 up 0.5.34
@@ -570,7 +571,8 @@ does not answer or is older than gluster-block-apid). API v1 only changes
 compatibly, CI checks it.
 
 It listens on the unix socket `/run/gluster-block/api.sock`, mode 0600 for
-root: the socket is the access control. Settings are in
+root: the socket is the access control, its clients may do everything.
+Settings are in
 `/etc/sysconfig/gluster-block-apid`, the log is
 `/var/log/gluster-block/gluster-block-apid.log`.
 <pre>
@@ -580,16 +582,55 @@ root: the socket is the access control. Settings are in
  "prio_path":"192.168.1.11","exported_on":["192.168.1.11","192.168.1.12","192.168.1.13"],...}
 </pre>
 
-Read-only endpoints, all under `/api/v1`:
+Endpoints, all under `/api/v1`:
 
 | Endpoint | |
 |---|---|
 | `GET /version[?volume=<vol>]` | versions, capabilities and the `features` a client may offer |
 | `GET /volumes`, `/volumes/<vol>` | gluster volumes |
 | `GET /volumes/<vol>/blocks[?detail=1]`, `/blocks/<block>` | block devices |
+| `POST /volumes/<vol>/blocks` | create (`name`, `size_bytes`, `hosts`, optional `auth`, `prealloc`, ...) |
+| `PATCH /volumes/<vol>/blocks/<block>` | one of `size_bytes` (+`force` to shrink), `auth: {enabled}`, `prio_path` |
+| `DELETE /volumes/<vol>/blocks/<block>[?unlink_storage=false&force=true]` | delete |
+| `POST /volumes/<vol>/rebalance` | spread the prio paths (`dry_run` for the plan) |
+| `POST /volumes/<vol>/hosts/<host>/maintenance` | `action` start or stop, `force`, `rebalance` |
 | `GET /volumes/<vol>/hosts`, `/hosts/<host>` | state of the hosts, of each block on a host |
 | `GET /volumes/<vol>/operations`, `/operations/<id>` | long operations, poll one until it is no longer `running` |
 | `GET /healthz` | 200 when gluster-blockd answers and is compatible |
+
+Create, delete, resize, rebalance and maintenance answer 202 with the
+operation and its `Location`. A create of a block that exists with the same
+size and hosts answers 200 with the block, a delete of a block that does not
+exist 204, so a client may simply repeat a request. A thin block on a
+dispersed volume or a forced maintenance answers 409 `confirm_required` with
+what it would do: send the request again with `"confirm": true`.
+<pre>
+<b># curl -s -X POST --unix-socket /run/gluster-block/api.sock -H 'Content-Type: application/json' \
+    -d '{"name": "block-2", "size_bytes": 10737418240, "hosts": ["192.168.1.11", "192.168.1.12", "192.168.1.13"]}' \
+    http://localhost/api/v1/volumes/hosting-volume/blocks</b>
+{"id":"3f0c...","volume":"hosting-volume","operation":"create","block":"block-2","state":"running",...}
+<b># curl -s --unix-socket /run/gluster-block/api.sock http://localhost/api/v1/volumes/hosting-volume/operations/3f0c...</b>
+{"id":"3f0c...","state":"running","phase":"allocating storage","step":{"percent":42,...},...}
+</pre>
+
+Remote clients (operators, scripts) use the TCP listener: set
+`GB_API_LISTEN`, `GB_API_TLS_CERT` and `GB_API_TLS_KEY` in
+`/etc/sysconfig/gluster-block-apid`, it is TLS only. A client shows a
+certificate signed by `GB_API_TLS_CA` or a bearer token; the tokens file
+(`/etc/gluster-block/api-tokens`, mode 0600) gives them the role `read` (GET
+only) or `admin`. Anonymous clients get 401, except for `GET /healthz`.
+<pre>
+<b># gluster-block-apid --new-token backup-script read</b>
+token: gbt_6b1c...
+add this line to /etc/gluster-block/api-tokens and run 'systemctl reload gluster-block-apid':
+token backup-script read sha256:9f2a...
+<b># echo 'cert operator.example.com admin' >> /etc/gluster-block/api-tokens</b>
+<b># systemctl reload gluster-block-apid</b>
+<b># curl -s --cacert ca.crt -H 'Authorization: Bearer gbt_6b1c...' https://node1:8443/api/v1/volumes</b>
+</pre>
+Only the hash of a token is kept. Every change is logged as `AUDIT` with the
+client in `gluster-block-apid.log`, and as `api <client>: ...` in the
+cmd_history.log of gluster-blockd.
 
 A restarted gluster-blockd of an older version is refused with 503
 `daemon_incompatible` until it is upgraded: both come from the same build,

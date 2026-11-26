@@ -69,7 +69,8 @@ echo "api-check: $SPEC against $REF"
 if $RUN breaking "$BASE" "$NEW" --fail-on ERR; then
 	echo "api-check: compatible with $REF"
 else
-	echo "api-check: $SPEC breaks API v1 of $REF. Clients of v1 must keep"
-	echo "working: add fields and endpoints instead of changing them."
+	echo "api-check: $SPEC breaks API v1 of $REF, or can not be read (see"
+	echo "above). Clients of v1 must keep working: add fields and endpoints"
+	echo "instead of changing them."
 	exit 1
 fi

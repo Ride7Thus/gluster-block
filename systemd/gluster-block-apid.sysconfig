@@ -11,6 +11,20 @@
 #GB_API_LOG_LEVEL=INFO
 #GB_API_LOG_DIR="/var/log/gluster-block"
 
+# TCP listener for remote clients (operators, scripts), off when empty. TLS
+# only: GB_API_TLS_CERT and GB_API_TLS_KEY (PEM) are required. A client shows
+# a certificate signed by GB_API_TLS_CA (mutual TLS) or a bearer token; the
+# tokens file gives them the role read (GET only) or admin:
+#   token <name> <admin|read> sha256:<hash>   (gluster-block-apid --new-token)
+#   cert  <certificate common name> <admin|read>
+# The tokens file is read again on 'systemctl reload gluster-block-apid'.
+# Every change is logged as AUDIT with the client in gluster-block-apid.log.
+#GB_API_LISTEN="*:8443"
+#GB_API_TLS_CERT="/etc/pki/gluster-block/apid.crt"
+#GB_API_TLS_KEY="/etc/pki/gluster-block/apid.key"
+#GB_API_TLS_CA="/etc/pki/gluster-block/clients-ca.crt"
+#GB_API_TOKENS_FILE="/etc/gluster-block/api-tokens"
+
 # Seconds to wait for gluster-blockd to answer one request. gluster-blockd
 # serves its local requests one by one, so a slow one (hosts with a host
 # down) delays the others.

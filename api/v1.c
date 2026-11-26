@@ -25,8 +25,11 @@
 # include  "apid.h"
 # include  "block.h"
 
+# include  <arpa/inet.h>
 # include  <ctype.h>
 # include  <errno.h>
+# include  <limits.h>
+# include  <netinet/in.h>
 # include  <stdio.h>
 # include  <stdlib.h>
 # include  <string.h>
@@ -211,6 +214,11 @@ apiV1Generic(json_object *o)
           !strcmp(key, "errMsg")) {
         continue;
       }
+      /* keys that are data, host names and addresses: as they are */
+      if (strpbrk(key, ".:abcdefghijklmnopqrstuvwxyz")) {
+        json_object_object_add(out, key, apiV1Generic(val));
+        continue;
+      }
       for (k = 0; key[k] && j + 1 < sizeof(buf); k++) {
         if (key[k] == '(' || key[k] == ')') {
           continue;
@@ -305,6 +313,8 @@ static const apiFeature apiFeatures[] = {
   {"volumes",          {NULL}},
   {"block_create",     {"create", NULL}},
   {"block_delete",     {"delete", NULL}},
+  /* delete in background with progress: the local daemon, cli RPC rev 17 */
+  {"async_delete",     {"delete", NULL}},
   {"block_resize",     {"modify_size", NULL}},
   {"block_auth",       {"create_auth", "modify_auth", NULL}},
   {"prio_path",        {"modify_prio", NULL}},
@@ -1071,6 +1081,645 @@ apiV1Operation1(apiRequest *req, apiResponse *resp)
 }
 
 
+/* ------------------------------------------------------------------------
+ * changes
+ * ------------------------------------------------------------------------ */
+
+/* the body has only these keys */
+static bool
+apiBodyKeys(apiRequest *req, apiResponse *resp, const char *const *allowed)
+{
+  size_t i;
+
+
+  if (!req->body) {
+    return true;
+  }
+  json_object_object_foreach(req->body, key, val) {
+    bool ok = false;
+
+    (void)val;
+    for (i = 0; allowed[i] && !ok; i++) {
+      ok = !strcmp(key, allowed[i]);
+    }
+    if (!ok) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "unknown field '%s' in the request body", key);
+      return false;
+    }
+  }
+  return true;
+}
+
+
+/* 0 absent, 1 present with @out set, -1 wrong type (@resp set) */
+static int
+apiBodyGet(apiRequest *req, apiResponse *resp, const char *key,
+           json_type type, json_object **out)
+{
+  json_object *v = apiJsonGet(req->body, key);
+
+
+  *out = NULL;
+  if (!v) {
+    return 0;
+  }
+  if (!json_object_is_type(v, type)) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "field '%s' must be %s", key,
+             type == json_type_int ? "an integer" :
+             type == json_type_boolean ? "true or false" :
+             type == json_type_string ? "a string" :
+             type == json_type_array ? "an array" : "an object");
+    return -1;
+  }
+  *out = v;
+  return 1;
+}
+
+
+static int
+apiBodyBool(apiRequest *req, apiResponse *resp, const char *key, bool *out)
+{
+  json_object *v;
+  int r = apiBodyGet(req, resp, key, json_type_boolean, &v);
+
+
+  if (r == 1) {
+    *out = json_object_get_boolean(v);
+  }
+  return r;
+}
+
+
+/* integer in [min, max] */
+static int
+apiBodyInt(apiRequest *req, apiResponse *resp, const char *key,
+           long long min, long long max, long long *out)
+{
+  json_object *v;
+  int r = apiBodyGet(req, resp, key, json_type_int, &v);
+
+
+  if (r == 1) {
+    *out = json_object_get_int64(v);
+    if (*out < min || *out > max) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "field '%s' must be between %lld and %lld", key, min, max);
+      return -1;
+    }
+  }
+  return r;
+}
+
+
+static bool
+apiQueryBoolDef(apiRequest *req, const char *key, bool def)
+{
+  const char *v = apiQuery(req, key);
+
+
+  if (!v) {
+    return def;
+  }
+  return apiQueryBool(req, key);
+}
+
+
+/* the block hosts of gluster-block are IP addresses */
+static bool
+apiAddrOk(const char *s)
+{
+  unsigned char buf[sizeof(struct in6_addr)];
+
+
+  return inet_pton(AF_INET, s, buf) == 1 || inet_pton(AF_INET6, s, buf) == 1;
+}
+
+
+/* what goes into the cmdlog of gluster-blockd */
+static void
+apiCmd(apiRequest *req, char *buf, size_t len)
+{
+  snprintf(buf, len, "api %s: %s %s %s", req->identity ? req->identity : "-",
+           req->method, req->url,
+           req->body ? json_object_to_json_string_ext(req->body, JSON_C_TO_STRING_PLAIN) : "");
+}
+
+
+/*
+ * The daemon accepted a long operation: 202 with the operation and its
+ * Location. When it finished at once (no operation id), 200 with the
+ * result.
+ */
+static void
+apiAccepted(apiRequest *req, apiResponse *resp, const char *volume, apiCall *c)
+{
+  const char *id = apiJsonStr(c->json, "OPERATION-ID");
+  json_object *op = json_object_new_object();
+
+
+  json_object_object_add(op, "id", apiStrOrNull(id));
+  json_object_object_add(op, "volume", json_object_new_string(volume));
+  json_object_object_add(op, "operation", apiStrOrNull(apiJsonStr(c->json, "OPERATION")));
+  json_object_object_add(op, "block", apiStrOrNull(apiJsonStr(c->json, "NAME")));
+  if (id) {
+    json_object_object_add(op, "state", json_object_new_string("running"));
+    json_object_object_add(op, "error", NULL);
+    json_object_object_add(op, "result", NULL);
+    snprintf(resp->location, sizeof(resp->location), "%s/volumes/%s/operations/%s",
+             API_PREFIX, volume, id);
+    apiRespond(resp, MHD_HTTP_ACCEPTED, op);
+    return;
+  }
+  json_object_object_add(op, "state", json_object_new_string("succeeded"));
+  json_object_object_add(op, "error", NULL);
+  json_object_object_add(op, "result", c->json ? apiV1Generic(c->json) : NULL);
+  apiRespond(resp, MHD_HTTP_OK, op);
+}
+
+
+/* the block as it is now, for the answer of a change; 200 */
+static void
+apiRespondBlock(apiResponse *resp, const char *volume, const char *block)
+{
+  apiCall c;
+
+
+  apiDaemonInfo(volume, block, &c);
+  if (!apiCallFailed(&c, resp) && c.json) {
+    apiRespond(resp, MHD_HTTP_OK, apiV1Block(c.json, false));
+  }
+  apiCallFree(&c);
+}
+
+
+/* the volume exists and is started; @hosting tells whether it has blocks */
+static bool
+apiStartedVolume(const char *name, apiResponse *resp, bool *hosting)
+{
+  json_object *v = apiFindVolume(name, resp, false);
+  const char *st;
+  json_object *h;
+
+
+  if (!v) {
+    if (resp->status != MHD_HTTP_NOT_FOUND || !(v = apiFindVolume(name, resp, true))) {
+      return false;
+    }
+  }
+  st = apiJsonStr(v, "STATUS");
+  if (!st || strcmp(st, "Started")) {
+    apiError(resp, MHD_HTTP_CONFLICT, "volume_not_ready", 0,
+             "volume %s is %s", name, st ? st : "not reachable");
+    json_object_put(v);
+    return false;
+  }
+  h = apiJsonGet(v, "BLOCK-HOSTING");
+  *hosting = h && json_object_get_boolean(h);
+  json_object_put(v);
+  apiRespond(resp, 0, NULL);
+  return true;
+}
+
+
+static const char *const apiCreateKeys[] = {
+  "name", "size_bytes", "hosts", "ha", "auth", "prealloc", "zerofill",
+  "ring_buffer_mb", "block_size", "io_timeout_sec", "storage", "confirm", NULL
+};
+
+
+/* create of a block that exists: the same request again is no error */
+static void
+apiCreateExisting(apiRequest *req, apiResponse *resp, const apiCreateArgs *a,
+                  apiCall *c)
+{
+  apiCall ic;
+  json_object *arr;
+  size_t i, n, matched = 0;
+  bool same;
+
+
+  apiDaemonInfo(a->volume, a->block, &ic);
+  if (ic.rpc || ic.exit || !ic.json) {
+    apiCallFailed(c, resp);
+    apiCallFree(&ic);
+    return;
+  }
+  same = (unsigned long long)apiJsonInt(ic.json, "SIZE-BYTES", -1) == a->size &&
+         apiJsonInt(ic.json, "HA", -1) == a->ha;
+  arr = apiJsonGet(ic.json, "HOST-STATES");
+  n = arr ? json_object_array_length(arr) : 0;
+  for (i = 0; i < n && same; i++) {
+    const char *h = apiJsonStr(json_object_array_get_idx(arr, i), "HOST");
+    char *hosts = strdup(a->hosts), *tok, *save = NULL;
+    bool found = false;
+
+    for (tok = hosts ? strtok_r(hosts, ",", &save) : NULL; tok && !found;
+         tok = strtok_r(NULL, ",", &save)) {
+      found = h && !strcmp(tok, h);
+    }
+    free(hosts);
+    same = found;
+    matched += found;
+  }
+  same = same && matched == a->ha;
+  if (same) {
+    apiRespond(resp, MHD_HTTP_OK, apiV1Block(ic.json, false));
+  } else {
+    apiError(resp, MHD_HTTP_CONFLICT, "already_exists", EEXIST,
+             "block %s/%s exists with another size or other hosts",
+             a->volume, a->block);
+  }
+  apiCallFree(&ic);
+}
+
+
+static void
+apiV1BlockCreate(apiRequest *req, apiResponse *resp)
+{
+  const char *volume = req->seg[1];
+  apiCreateArgs a;
+  json_object *v, *hosts;
+  char *hostlist = NULL;
+  char cmd[2048];
+  long long n;
+  bool hosting;
+  size_t i, nh;
+  apiCall c;
+
+
+  memset(&a, 0, sizeof(a));
+  a.volume = volume;
+  a.prealloc = true;
+  if (!req->body) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "a JSON body with name, size_bytes and hosts is needed");
+    return;
+  }
+  if (!apiBodyKeys(req, resp, apiCreateKeys)) {
+    return;
+  }
+  if (apiBodyGet(req, resp, "name", json_type_string, &v) != 1 ||
+      !apiBlockOk(json_object_get_string(v))) {
+    if (resp->status != MHD_HTTP_BAD_REQUEST) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "name: letters, digits, '-' and '_' are needed");
+    }
+    return;
+  }
+  a.block = json_object_get_string(v);
+  if (apiBodyInt(req, resp, "size_bytes", 1, LLONG_MAX, &n) != 1) {
+    if (resp->status != MHD_HTTP_BAD_REQUEST) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "size_bytes is needed");
+    }
+    return;
+  }
+  a.size = n;
+
+  if (apiBodyGet(req, resp, "hosts", json_type_array, &hosts) != 1 ||
+      !(nh = json_object_array_length(hosts))) {
+    if (resp->status != MHD_HTTP_BAD_REQUEST) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "hosts: the IP addresses of the hosts that export the block");
+    }
+    return;
+  }
+  for (i = 0; i < nh; i++) {
+    json_object *h = json_object_array_get_idx(hosts, i);
+    const char *s = json_object_is_type(h, json_type_string) ?
+                    json_object_get_string(h) : NULL;
+    char *tmp;
+    size_t j;
+
+    if (!s || !apiAddrOk(s)) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "hosts[%zu]: an IP address is needed, gluster-block does not "
+               "take host names", i);
+      free(hostlist);
+      return;
+    }
+    for (j = 0; j < i; j++) {
+      if (!strcmp(s, json_object_get_string(json_object_array_get_idx(hosts, j)))) {
+        apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+                 "host %s is given twice", s);
+        free(hostlist);
+        return;
+      }
+    }
+    if (asprintf(&tmp, "%s%s%s", hostlist ? hostlist : "", hostlist ? "," : "", s) < 0) {
+      free(hostlist);
+      apiError(resp, MHD_HTTP_INTERNAL_SERVER_ERROR, "operation_failed", ENOMEM,
+               "out of memory");
+      return;
+    }
+    free(hostlist);
+    hostlist = tmp;
+  }
+  a.hosts = hostlist;
+  a.ha = nh;
+
+  if (apiBodyInt(req, resp, "ha", 1, 64, &n) < 0) {
+    goto out;
+  } else if (apiJsonGet(req->body, "ha") && (size_t)n != nh) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "ha must be the number of hosts (%zu)", nh);
+    goto out;
+  }
+  if (apiBodyBool(req, resp, "auth", &a.auth) < 0 ||
+      apiBodyBool(req, resp, "zerofill", &a.zerofill) < 0 ||
+      apiBodyBool(req, resp, "confirm", &a.confirmed) < 0) {
+    goto out;
+  }
+  if (apiBodyGet(req, resp, "prealloc", json_type_string, &v) < 0) {
+    goto out;
+  } else if (v) {
+    if (!strcmp(json_object_get_string(v), "no")) {
+      a.prealloc = false;
+    } else if (strcmp(json_object_get_string(v), "full")) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "prealloc must be \"full\" or \"no\"");
+      goto out;
+    }
+  }
+  if (a.zerofill && !a.prealloc) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "zerofill needs prealloc \"full\"");
+    goto out;
+  }
+  if (apiBodyInt(req, resp, "ring_buffer_mb", 1, 1024, &n) < 0) {
+    goto out;
+  }
+  a.ringBuffer = apiJsonGet(req->body, "ring_buffer_mb") ? n : 0;
+  if (apiBodyInt(req, resp, "block_size", 512, 1048576, &n) < 0) {
+    goto out;
+  } else if (apiJsonGet(req->body, "block_size")) {
+    if (n % 512) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "block_size must be a multiple of 512");
+      goto out;
+    }
+    a.blockSize = n;
+  }
+  if (apiBodyInt(req, resp, "io_timeout_sec", 1, 3600, &n) < 0) {
+    goto out;
+  }
+  a.ioTimeout = apiJsonGet(req->body, "io_timeout_sec") ? n : 0;
+  if (apiBodyGet(req, resp, "storage", json_type_string, &v) < 0) {
+    goto out;
+  } else if (v) {
+    a.storage = json_object_get_string(v);
+    if (strlen(a.storage) >= 255 || strchr(a.storage, '/')) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "storage: the name of a file in /block-store");
+      goto out;
+    }
+  }
+
+  /* a first block makes the volume a block hosting one */
+  if (!apiStartedVolume(volume, resp, &hosting)) {
+    goto out;
+  }
+
+  apiCmd(req, cmd, sizeof(cmd));
+  apiDaemonCreate(&a, cmd, &c);
+  if (c.rpc == 0 && c.exit == EEXIST) {
+    apiCreateExisting(req, resp, &a, &c);
+  } else if (!apiCallFailed(&c, resp)) {
+    apiVolumesInvalidate();
+    apiAccepted(req, resp, volume, &c);
+  }
+  apiCallFree(&c);
+
+ out:
+  free(hostlist);
+}
+
+
+static void
+apiV1BlockDelete(apiRequest *req, apiResponse *resp)
+{
+  const char *volume = req->seg[1];
+  const char *block = req->seg[3];
+  char cmd[2048];
+  bool hosting;
+  apiCall c;
+
+
+  if (req->body && json_object_object_length(req->body)) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "delete takes no body: unlink_storage and force are query arguments");
+    return;
+  }
+  if (!apiStartedVolume(volume, resp, &hosting)) {
+    return;
+  }
+  if (!hosting) {
+    /* no blocks at all: it is gone, which is what was asked */
+    apiRespond(resp, MHD_HTTP_NO_CONTENT, NULL);
+    return;
+  }
+
+  apiCmd(req, cmd, sizeof(cmd));
+  apiDaemonDelete(volume, block, apiQueryBoolDef(req, "unlink_storage", true),
+                  apiQueryBool(req, "force"), cmd, &c);
+  if (c.rpc == 0 && c.exit == ENOENT) {
+    apiRespond(resp, MHD_HTTP_NO_CONTENT, NULL);
+  } else if (!apiCallFailed(&c, resp)) {
+    apiVolumesInvalidate();
+    apiAccepted(req, resp, volume, &c);
+  }
+  apiCallFree(&c);
+}
+
+
+static const char *const apiPatchKeys[] = {
+  "size_bytes", "force", "auth", "prio_path", NULL
+};
+
+
+static void
+apiV1BlockPatch(apiRequest *req, apiResponse *resp)
+{
+  const char *volume = req->seg[1];
+  const char *block = req->seg[3];
+  json_object *auth = NULL, *prio = NULL;
+  long long size = 0;
+  bool force = false, enable = false;
+  int changes = 0;
+  char cmd[2048];
+  apiCall c;
+
+
+  if (!req->body || !apiBodyKeys(req, resp, apiPatchKeys)) {
+    if (!req->body) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "a JSON body with size_bytes, auth or prio_path is needed");
+    }
+    return;
+  }
+  if (apiBodyInt(req, resp, "size_bytes", 1, LLONG_MAX, &size) < 0 ||
+      apiBodyBool(req, resp, "force", &force) < 0 ||
+      apiBodyGet(req, resp, "auth", json_type_object, &auth) < 0 ||
+      apiBodyGet(req, resp, "prio_path", json_type_string, &prio) < 0) {
+    return;
+  }
+  changes = !!apiJsonGet(req->body, "size_bytes") + !!auth + !!prio;
+  if (changes != 1) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "one change per request: size_bytes, auth or prio_path");
+    return;
+  }
+  if (auth) {
+    json_object *e = apiJsonGet(auth, "enabled");
+
+    if (json_object_object_length(auth) != 1 || !e ||
+        !json_object_is_type(e, json_type_boolean)) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "auth must be {\"enabled\": true|false}");
+      return;
+    }
+    if (apiJsonGet(req->body, "force")) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "force is for size_bytes and prio_path");
+      return;
+    }
+    enable = json_object_get_boolean(e);
+  }
+  if (prio && !apiAddrOk(json_object_get_string(prio))) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "prio_path: the IP address of one of the hosts of the block");
+    return;
+  }
+  if (!apiBlockHostingVolume(volume, resp)) {
+    return;
+  }
+
+  if (!prio && !auth && !force) {
+    /* shrinking cuts off data: the daemon refuses with a generic error */
+    apiDaemonInfo(volume, block, &c);
+    if (!c.rpc && !c.exit && c.json &&
+        apiJsonInt(c.json, "SIZE-BYTES", 0) > size) {
+      apiError(resp, MHD_HTTP_CONFLICT, "force_required", 0,
+               "block %s/%s has %lld bytes, shrinking it to %lld loses the "
+               "data at its end: send \"force\": true", volume, block,
+               apiJsonInt(c.json, "SIZE-BYTES", 0), size);
+      apiCallFree(&c);
+      return;
+    }
+    apiCallFree(&c);
+  }
+
+  apiCmd(req, cmd, sizeof(cmd));
+  if (prio) {
+    apiDaemonPrio(volume, block, json_object_get_string(prio), force, cmd, &c);
+  } else if (auth) {
+    apiDaemonAuth(volume, block, enable, cmd, &c);
+  } else {
+    apiDaemonResize(volume, block, size, force, cmd, &c);
+  }
+  if (!apiCallFailed(&c, resp)) {
+    if (prio || auth) {
+      apiRespondBlock(resp, volume, block);
+    } else {
+      apiAccepted(req, resp, volume, &c);
+    }
+  } else if (resp->status == MHD_HTTP_NOT_FOUND) {
+    apiError(resp, MHD_HTTP_NOT_FOUND, "block_not_found", ENOENT,
+             "block %s/%s does not exist", volume, block);
+  }
+  apiCallFree(&c);
+}
+
+
+static const char *const apiRebalanceKeys[] = {"dry_run", NULL};
+
+
+static void
+apiV1Rebalance(apiRequest *req, apiResponse *resp)
+{
+  const char *volume = req->seg[1];
+  bool dryRun = false;
+  char cmd[2048];
+  apiCall c;
+
+
+  if (!apiBodyKeys(req, resp, apiRebalanceKeys) ||
+      apiBodyBool(req, resp, "dry_run", &dryRun) < 0 ||
+      !apiBlockHostingVolume(volume, resp)) {
+    return;
+  }
+  apiCmd(req, cmd, sizeof(cmd));
+  apiDaemonRebalance(volume, dryRun, cmd, &c);
+  if (!apiCallFailed(&c, resp)) {
+    if (apiJsonStr(c.json, "OPERATION-ID")) {
+      apiAccepted(req, resp, volume, &c);
+    } else {
+      /* dry run: the plan */
+      apiRespond(resp, MHD_HTTP_OK, apiV1Generic(c.json));
+    }
+  }
+  apiCallFree(&c);
+}
+
+
+static const char *const apiMaintKeys[] = {
+  "action", "force", "rebalance", "confirm", NULL
+};
+
+
+static void
+apiV1Maintenance(apiRequest *req, apiResponse *resp)
+{
+  const char *volume = req->seg[1];
+  const char *host = req->seg[3];
+  json_object *action;
+  bool force = false, rebalance = false, confirm = false, start;
+  char cmd[2048];
+  apiCall c;
+
+
+  if (!req->body || !apiBodyKeys(req, resp, apiMaintKeys)) {
+    if (!req->body) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "a JSON body with action \"start\" or \"stop\" is needed");
+    }
+    return;
+  }
+  if (apiBodyGet(req, resp, "action", json_type_string, &action) != 1 ||
+      (strcmp(json_object_get_string(action), "start") &&
+       strcmp(json_object_get_string(action), "stop"))) {
+    if (resp->status != MHD_HTTP_BAD_REQUEST) {
+      apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+               "action must be \"start\" or \"stop\"");
+    }
+    return;
+  }
+  start = !strcmp(json_object_get_string(action), "start");
+  if (apiBodyBool(req, resp, "force", &force) < 0 ||
+      apiBodyBool(req, resp, "rebalance", &rebalance) < 0 ||
+      apiBodyBool(req, resp, "confirm", &confirm) < 0) {
+    return;
+  }
+  if (start && rebalance) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", EINVAL,
+             "rebalance is for stop");
+    return;
+  }
+  if (!apiBlockHostingVolume(volume, resp)) {
+    return;
+  }
+
+  apiCmd(req, cmd, sizeof(cmd));
+  apiDaemonMaint(volume, host, start, force, rebalance, confirm, cmd, &c);
+  if (!apiCallFailed(&c, resp)) {
+    apiAccepted(req, resp, volume, &c);
+  }
+  apiCallFree(&c);
+}
+
+
 static void
 apiV1Index(apiRequest *req, apiResponse *resp)
 {
@@ -1093,21 +1742,30 @@ typedef struct apiRoute {
   const char  *pattern[API_MAX_SEGMENTS];  /* "*" matches one segment */
   size_t       nseg;
   apiHandlerFn get;
+  apiHandlerFn post;
+  apiHandlerFn patch;
+  apiHandlerFn del;
   bool         daemon;                     /* needs a compatible daemon */
+  const char  *allow;                      /* the methods above, for 405 */
 } apiRoute;
 
 static const apiRoute apiRoutes[] = {
-  {{NULL},                                   0, apiV1Index,      false},
-  {{"healthz"},                              1, apiV1Health,     false},
-  {{"version"},                              1, apiV1Version,    false},
-  {{"volumes"},                              1, apiV1Volumes,    true},
-  {{"volumes", "*"},                         2, apiV1VolumeOne,  true},
-  {{"volumes", "*", "blocks"},               3, apiV1Blocks,     true},
-  {{"volumes", "*", "blocks", "*"},          4, apiV1Block1,     true},
-  {{"volumes", "*", "hosts"},                3, apiV1Hosts,      true},
-  {{"volumes", "*", "hosts", "*"},           4, apiV1Hosts,      true},
-  {{"volumes", "*", "operations"},           3, apiV1Operations, true},
-  {{"volumes", "*", "operations", "*"},      4, apiV1Operation1, true},
+  {{NULL},                              0, apiV1Index, NULL, NULL, NULL, false, "GET"},
+  {{"healthz"},                         1, apiV1Health, NULL, NULL, NULL, false, "GET"},
+  {{"version"},                         1, apiV1Version, NULL, NULL, NULL, false, "GET"},
+  {{"volumes"},                         1, apiV1Volumes, NULL, NULL, NULL, true, "GET"},
+  {{"volumes", "*"},                    2, apiV1VolumeOne, NULL, NULL, NULL, true, "GET"},
+  {{"volumes", "*", "blocks"},          3, apiV1Blocks, apiV1BlockCreate, NULL, NULL,
+                                           true, "GET, POST"},
+  {{"volumes", "*", "blocks", "*"},     4, apiV1Block1, NULL, apiV1BlockPatch,
+                                           apiV1BlockDelete, true, "GET, PATCH, DELETE"},
+  {{"volumes", "*", "rebalance"},       3, NULL, apiV1Rebalance, NULL, NULL, true, "POST"},
+  {{"volumes", "*", "hosts"},           3, apiV1Hosts, NULL, NULL, NULL, true, "GET"},
+  {{"volumes", "*", "hosts", "*"},      4, apiV1Hosts, NULL, NULL, NULL, true, "GET"},
+  {{"volumes", "*", "hosts", "*", "maintenance"},
+                                        5, NULL, apiV1Maintenance, NULL, NULL, true, "POST"},
+  {{"volumes", "*", "operations"},      3, apiV1Operations, NULL, NULL, NULL, true, "GET"},
+  {{"volumes", "*", "operations", "*"}, 4, apiV1Operation1, NULL, NULL, NULL, true, "GET"},
 };
 
 
@@ -1115,6 +1773,7 @@ void
 apiV1Handle(apiRequest *req, apiResponse *resp)
 {
   const apiRoute *r = NULL;
+  apiHandlerFn fn;
   size_t i, j;
 
 
@@ -1138,10 +1797,19 @@ apiV1Handle(apiRequest *req, apiResponse *resp)
              req->url);
     return;
   }
-  if (strcmp(req->method, "GET")) {
-    resp->allow = "GET";
+  fn = !strcmp(req->method, "GET") ? r->get :
+       !strcmp(req->method, "POST") ? r->post :
+       !strcmp(req->method, "PATCH") ? r->patch :
+       !strcmp(req->method, "DELETE") ? r->del : NULL;
+  if (!fn) {
+    resp->allow = r->allow;
     apiError(resp, MHD_HTTP_METHOD_NOT_ALLOWED, "method_not_allowed", 0,
              "%s is not allowed on %s", req->method, req->url);
+    return;
+  }
+  if (req->body && fn == r->get) {
+    apiError(resp, MHD_HTTP_BAD_REQUEST, "invalid_request", 0,
+             "GET takes no request body");
     return;
   }
   if (!apiCheckNames(req, resp)) {
@@ -1150,5 +1818,5 @@ apiV1Handle(apiRequest *req, apiResponse *resp)
   if (r->daemon && !apiDaemonCompatible(resp, false)) {
     return;
   }
-  r->get(req, resp);
+  fn(req, resp);
 }

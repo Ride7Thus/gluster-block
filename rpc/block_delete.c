@@ -292,6 +292,7 @@ glusterBlockCleanUp(struct glfs *glfs, char *blockname,
 
   /* delete metafile and block file */
   if (forcedel || !asyncret) {
+    blockOpPhase(unlink ? "removing storage" : "removing metadata");
     GB_METAUPDATE_OR_GOTO(lock, glfs, blockname, info->volume,
                           ret, errMsg, out, "ENTRYDELETE: INPROGRESS\n");
     if (unlink && glusterBlockDeleteEntry(glfs, info->volume, info->gbid)) {
@@ -325,17 +326,23 @@ glusterBlockCleanUp(struct glfs *glfs, char *blockname,
 }
 
 
+/*
+ * Delete of a block, in the cli thread or in a worker (async delete): the
+ * checks run first, then the hosts are asked to remove their targets and
+ * the storage is removed, which 'status' shows as the operation "delete".
+ */
 static blockResponse *
-block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
+blockDeleteCliRun(blockDeleteCli *blk)
 {
   blockRemoteDeleteResp *savereply = NULL;
   MetaInfo *info = NULL;
   blockResponse *reply = NULL;
-  struct glfs *glfs;
+  struct glfs *glfs = NULL;
   struct glfs_fd *lkfd = NULL;
   char *errMsg = NULL;
   int errCode = -1;
   int ret;
+  bool privGlfs = false;
   blockServerDefPtr list = NULL;
 
 
@@ -352,7 +359,7 @@ block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
   }
 
   errCode = 0;
-  glfs = glusterBlockVolumeInit(blk->volume, &errCode, &errMsg);
+  glfs = blockVolumeGet(blk->volume, &errCode, &errMsg, &privGlfs);
   if (!glfs) {
     LOG("mgmt", GB_LOG_ERROR,
         "glusterBlockVolumeInit(%s) for block %s failed",
@@ -362,6 +369,11 @@ block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
 
   lkfd = glusterBlockOpenMetaLockFile(glfs, blk->volume, &errCode, &errMsg);
   if (!lkfd) {
+    if (errCode == ENOENT) {
+      GB_FREE(errMsg);
+      GB_ASPRINTF(&errMsg, "block %s/%s doesn't exist", blk->volume,
+                  blk->block_name);
+    }
     LOG("mgmt", GB_LOG_ERROR, "%s %s for block %s",
         FAILED_CREATING_META, blk->volume, blk->block_name);
     goto optfail;
@@ -414,6 +426,11 @@ block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
     }
   }
 
+  /* checked: an async delete returns IN-PROGRESS from here on */
+  blockOpBegin(lkfd, "delete", blk->block_name, info->gbid, info->size);
+  blockOpPhase("deleting targets");
+  gbAsyncDetach();
+
   errCode = glusterBlockCleanUp(glfs, blk->block_name, blk->force, blk->unlink, savereply);
   if (errCode) {
     LOG("mgmt", GB_LOG_WARNING, "glusterBlockCleanUp: return %d "
@@ -448,8 +465,57 @@ block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
     GB_FREE(savereply);
   }
   GB_FREE(errMsg);
+  blockVolumePut(glfs, privGlfs);
 
   return reply;
+}
+
+
+static blockResponse *
+block_delete_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
+{
+  return blockDeleteCliRun(blk);
+}
+
+
+static void
+blockDeleteCliFree(void *data)
+{
+  blockDeleteCli *blk = data;
+
+  if (!blk) {
+    return;
+  }
+  GB_FREE(blk->cmd);
+  GB_FREE(blk);
+}
+
+
+static blockResponse *
+blockDeleteCliRunAsync(void *data)
+{
+  return blockDeleteCliRun(data);
+}
+
+
+static blockResponse *
+block_delete_async_cli_1_svc_st(blockDeleteCli *blk, struct svc_req *rqstp)
+{
+  blockDeleteCli *copy = NULL;
+
+  /* the RPC arguments are freed once we return, the worker needs a copy */
+  if (GB_ALLOC(copy) < 0) {
+    return blockDeleteCliRun(blk);
+  }
+  memcpy(copy, blk, sizeof(*copy));
+  copy->cmd = NULL;
+  if (GB_STRDUP(copy->cmd, blk->cmd ? blk->cmd : "") < 0) {
+    blockDeleteCliFree(copy);
+    return blockDeleteCliRun(blk);
+  }
+
+  return gbAsyncRun("delete", blk->volume, blk->block_name, blk->json_resp,
+                    blockDeleteCliRunAsync, copy, blockDeleteCliFree);
 }
 
 
@@ -525,5 +591,16 @@ block_delete_cli_1_svc(blockDeleteCli *blk, blockResponse *reply,
   int ret;
 
   GB_RPC_CALL(delete_cli, blk, reply, rqstp, ret);
+  return ret;
+}
+
+
+bool_t
+block_delete_async_cli_1_svc(blockDeleteCli *blk, blockResponse *reply,
+                             struct svc_req *rqstp)
+{
+  int ret;
+
+  GB_RPC_CALL(delete_async_cli, blk, reply, rqstp, ret);
   return ret;
 }

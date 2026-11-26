@@ -220,6 +220,161 @@ apiDaemonStatus(const char *volume, const char *opid, apiCall *c)
 }
 
 
+/*
+ * Changes. @cmd goes into the cmdlog of gluster-blockd like the command line
+ * of the cli: what was asked through the API and by whom.
+ */
+
+int
+apiDaemonCreate(const apiCreateArgs *a, const char *cmd, apiCall *c)
+{
+  blockCreateCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), a->volume);
+  apiCopyName(obj.block_name, sizeof(obj.block_name), a->block);
+  apiCopyName(obj.storage, sizeof(obj.storage), a->storage);
+  obj.block_hosts = (char *)a->hosts;
+  obj.size = a->size;
+  obj.mpath = a->ha;
+  obj.auth_mode = a->auth;
+  obj.prealloc = a->prealloc;
+  obj.zerofill = a->zerofill;
+  obj.thin_confirmed = a->confirmed;
+  obj.rb_size = a->ringBuffer;
+  obj.blk_size = a->blockSize;
+  obj.io_timeout = a->ioTimeout;
+  obj.async = true;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_create_cli_1, &obj, "create");
+  return c->rpc;
+}
+
+
+int
+apiDaemonDelete(const char *volume, const char *block, bool unlink,
+                bool force, const char *cmd, apiCall *c)
+{
+  blockDeleteCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  apiCopyName(obj.block_name, sizeof(obj.block_name), block);
+  obj.unlink = unlink;
+  obj.force = force;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_delete_async_cli_1, &obj, "delete");
+  return c->rpc;
+}
+
+
+int
+apiDaemonResize(const char *volume, const char *block, unsigned long long size,
+                bool force, const char *cmd, apiCall *c)
+{
+  blockModifySizeCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  apiCopyName(obj.block_name, sizeof(obj.block_name), block);
+  obj.size = size;
+  obj.force = force;
+  obj.async = true;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_modify_size_cli_1, &obj, "modify size");
+  return c->rpc;
+}
+
+
+int
+apiDaemonAuth(const char *volume, const char *block, bool enable,
+              const char *cmd, apiCall *c)
+{
+  blockModifyCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  apiCopyName(obj.block_name, sizeof(obj.block_name), block);
+  obj.auth_mode = enable;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_modify_cli_1, &obj, "modify auth");
+  return c->rpc;
+}
+
+
+int
+apiDaemonPrio(const char *volume, const char *block, const char *host,
+              bool force, const char *cmd, apiCall *c)
+{
+  blockModifyPrioCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  apiCopyName(obj.block_name, sizeof(obj.block_name), block);
+  apiCopyName(obj.prio_path, sizeof(obj.prio_path), host);
+  obj.force = force;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_modify_prio_cli_1, &obj, "modify prio-path");
+  return c->rpc;
+}
+
+
+int
+apiDaemonRebalance(const char *volume, bool dryRun, const char *cmd, apiCall *c)
+{
+  blockRebalanceCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  obj.dry_run = dryRun;
+  obj.async = true;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_rebalance_cli_1, &obj, "rebalance");
+  return c->rpc;
+}
+
+
+int
+apiDaemonMaint(const char *volume, const char *host, bool start, bool force,
+               bool rebalance, bool confirmed, const char *cmd, apiCall *c)
+{
+  blockHostMaintCli obj;
+  int daemonDown_ = 0;
+
+
+  memset(&obj, 0, sizeof(obj));
+  apiCopyName(obj.volume, sizeof(obj.volume), volume);
+  apiCopyName(obj.host, sizeof(obj.host), host);
+  obj.start = start;
+  obj.force = force;
+  obj.rebalance = rebalance;
+  obj.confirmed = confirmed;
+  obj.async = true;
+  obj.cmd = (char *)cmd;
+  obj.json_resp = GB_JSON_PLAIN;
+  API_RPC(c, block_host_maint_cli_1, &obj, "maintenance");
+  return c->rpc;
+}
+
+
 /* HTTP status and error code of a failed command */
 static unsigned int
 apiErrnoStatus(int err, const char **code)
@@ -404,6 +559,16 @@ apiDaemonCompatible(apiResponse *resp, bool force)
 static pthread_mutex_t apiVolLock = PTHREAD_MUTEX_INITIALIZER;
 static char  *apiVolText;
 static time_t apiVolAt;
+
+
+void
+apiVolumesInvalidate(void)
+{
+  pthread_mutex_lock(&apiVolLock);
+  free(apiVolText);
+  apiVolText = NULL;
+  pthread_mutex_unlock(&apiVolLock);
+}
 
 
 json_object *

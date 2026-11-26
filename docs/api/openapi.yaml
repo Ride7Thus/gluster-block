@@ -1,14 +1,27 @@
 openapi: 3.0.3
 info:
   title: gluster-block API
-  version: "1.0"
+  version: "1.1"
   description: |
     HTTP API of gluster-block, served by gluster-block-apid on every gluster
     node. It is a bridge to the local gluster-blockd, which coordinates the
     other hosts of a block: any node can be asked.
 
-    Transport: the unix socket /run/gluster-block/api.sock (root only), used
-    by the Cockpit plugin.
+    Transports:
+    - the unix socket /run/gluster-block/api.sock (root only, every client
+      is an admin), used by the Cockpit plugin;
+    - TCP with TLS when GB_API_LISTEN is set: the client shows a certificate
+      signed by GB_API_TLS_CA (mutual TLS) or a bearer token; the tokens
+      file gives them the role read (GET only) or admin. Without them only
+      GET /healthz answers, everything else is 401.
+
+    Long operations (create, delete, resize, rebalance, maintenance) answer
+    202 with the operation and its Location; poll it until its state is no
+    longer running. Only one long operation runs on a volume at a time,
+    others get 423 volume_busy meanwhile. A change that needs a
+    confirmation (a thin block on a dispersed volume, a forced maintenance)
+    answers 409 confirm_required with what it would do; send it again with
+    "confirm": true.
 
     Compatibility: v1 only changes compatibly. Clients must ignore fields
     they do not know; new fields, endpoints and enum values may be added.
@@ -24,6 +37,15 @@ info:
 servers:
   - url: http://localhost
     description: unix socket /run/gluster-block/api.sock
+  - url: https://{host}:{port}
+    description: TLS listener (GB_API_LISTEN)
+    variables:
+      host: {default: localhost}
+      port: {default: "8443"}
+
+security:
+  - {}
+  - bearerAuth: []
 
 paths:
   /api/v1:
@@ -134,11 +156,91 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "503": {$ref: "#/components/responses/Unavailable"}
+    post:
+      summary: create a block device (in background)
+      description: |
+        The first block makes a started gluster volume a block hosting one.
+        The same request for a block that exists with the same size and
+        hosts answers 200 with the block (idempotent); with others 409
+        already_exists.
+      operationId: createBlock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BlockCreate"}
+      responses:
+        "200":
+          description: the block exists as asked
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Block"}
+        "202": {$ref: "#/components/responses/Accepted"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "423": {$ref: "#/components/responses/Busy"}
+        "502": {$ref: "#/components/responses/HostUnreachable"}
+        "503": {$ref: "#/components/responses/Unavailable"}
 
   /api/v1/volumes/{volume}/blocks/{block}:
     parameters:
       - $ref: "#/components/parameters/Volume"
       - $ref: "#/components/parameters/Block"
+    patch:
+      summary: change one thing of a block
+      description: |
+        One change per request: size_bytes (in background, 202; shrinking
+        needs force), auth (200 with the block) or prio_path (moves the
+        active/optimized path, 200 with the block; force skips hosts that do
+        not answer).
+      operationId: changeBlock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BlockPatch"}
+      responses:
+        "200":
+          description: changed
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Block"}
+        "202": {$ref: "#/components/responses/Accepted"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "423": {$ref: "#/components/responses/Busy"}
+        "502": {$ref: "#/components/responses/HostUnreachable"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+    delete:
+      summary: delete a block device (in background)
+      description: A block that does not exist answers 204 (idempotent).
+      operationId: deleteBlock
+      parameters:
+        - name: unlink_storage
+          in: query
+          description: also remove the backing file [default true]
+          schema: {type: boolean}
+        - name: force
+          in: query
+          description: delete even when hosts do not answer
+          schema: {type: boolean}
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        "204": {description: there is no such block}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "423": {$ref: "#/components/responses/Busy"}
+        "502": {$ref: "#/components/responses/HostUnreachable"}
+        "503": {$ref: "#/components/responses/Unavailable"}
     get:
       summary: one block device
       operationId: getBlock
@@ -156,6 +258,64 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/rebalance:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+    post:
+      summary: spread the prio paths of the volume over its hosts
+      description: |
+        Moves prio paths off hosts that do not answer first, then levels
+        them; hosts in maintenance are left out. dry_run answers 200 with the
+        plan, otherwise it runs in background (202); when nothing has to
+        move it is done at once (200, the plan with dry_run false).
+      operationId: rebalance
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RebalanceRequest"}
+      responses:
+        "200":
+          description: the plan of a dry run, or nothing had to move
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RebalancePlan"}
+        "202": {$ref: "#/components/responses/Accepted"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "423": {$ref: "#/components/responses/Busy"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /api/v1/volumes/{volume}/hosts/{host}/maintenance:
+    parameters:
+      - $ref: "#/components/parameters/Volume"
+      - $ref: "#/components/parameters/Host"
+    post:
+      summary: take a host of the volume out of service, or bring it back
+      description: |
+        start: refused (409) when a block would lose its last working path
+        or the host does not answer, unless force; force first answers 409
+        confirm_required with what it skips. stop: rebalance spreads the prio
+        paths again. Both run in background (202).
+      operationId: maintenance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MaintenanceRequest"}
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "423": {$ref: "#/components/responses/Busy"}
+        "502": {$ref: "#/components/responses/HostUnreachable"}
         "503": {$ref: "#/components/responses/Unavailable"}
 
   /api/v1/volumes/{volume}/hosts:
@@ -236,6 +396,16 @@ paths:
         "503": {$ref: "#/components/responses/Unavailable"}
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        TLS listener only: a token made with 'gluster-block-apid --new-token'
+        and listed in the tokens file. A client certificate signed by
+        GB_API_TLS_CA whose common name is listed there works as well
+        (mutual TLS, not expressible in OpenAPI 3.0).
+
   parameters:
     Volume:
       name: volume
@@ -273,7 +443,39 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
     Conflict:
-      description: volume_not_ready (the volume is not started or not reachable)
+      description: |
+        volume_not_ready (the volume is not started or not reachable),
+        already_exists, confirm_required (send again with "confirm": true),
+        force_required (shrinking a block), refusals of the daemon
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Accepted:
+      description: a long operation runs, poll the Location
+      headers:
+        Location:
+          description: /api/v1/volumes/{volume}/operations/{id}
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/OperationAccepted"}
+    Unauthorized:
+      description: TLS listener without a known certificate or token (unauthorized)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: the client has the role read (forbidden)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Busy:
+      description: another long operation runs on the volume (volume_busy)
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    HostUnreachable:
+      description: a host of the block does not answer (host_unreachable)
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -302,10 +504,11 @@ components:
             code:
               type: string
               description: |
+                unauthorized, forbidden,
                 not_found, method_not_allowed, invalid_request,
                 volume_not_found, not_block_hosting, volume_not_ready,
                 block_not_found, host_not_found, operation_not_found,
-                already_exists, confirm_required, volume_busy,
+                already_exists, confirm_required, force_required, volume_busy,
                 not_permitted, no_space, host_unreachable, operation_failed,
                 daemon_unavailable, daemon_incompatible, daemon_timeout,
                 daemon_error
@@ -369,7 +572,8 @@ components:
           type: array
           description: |
             what a client may offer: volumes, block_create, block_delete,
-            block_resize, block_auth, prio_path, rebalance, host_maintenance
+            async_delete, block_resize, block_auth, prio_path, rebalance,
+            host_maintenance
           items: {type: string}
 
     Brick:
@@ -638,6 +842,101 @@ components:
                 what the operation returned when it succeeded, keys in
                 snake_case; its content depends on the operation
               additionalProperties: true
+
+    OperationAccepted:
+      type: object
+      required: [id, volume, operation, block, state, error, result]
+      properties:
+        id: {type: string, nullable: true}
+        volume: {type: string}
+        operation: {type: string, nullable: true}
+        block: {type: string, nullable: true}
+        state: {type: string, enum: [running]}
+        error: {type: object, nullable: true}
+        result: {type: object, nullable: true}
+
+    BlockCreate:
+      type: object
+      required: [name, size_bytes, hosts]
+      additionalProperties: false
+      properties:
+        name: {type: string, pattern: "^[A-Za-z0-9_-]{1,254}$"}
+        size_bytes: {type: integer, format: int64, minimum: 1}
+        hosts:
+          type: array
+          minItems: 1
+          description: IP addresses of the hosts that export the block (no host names)
+          items: {type: string}
+        ha:
+          type: integer
+          description: must be the number of hosts [default that number]
+        auth: {type: boolean, description: "CHAP [default false]"}
+        prealloc:
+          type: string
+          enum: [full, "no"]
+          description: |
+            [default full]; "no" on a dispersed volume needs confirm
+        zerofill: {type: boolean, description: "needs prealloc full [default false]"}
+        ring_buffer_mb: {type: integer, minimum: 1, maximum: 1024}
+        block_size: {type: integer, description: multiple of 512}
+        io_timeout_sec: {type: integer, minimum: 1, maximum: 3600}
+        storage: {type: string, description: an existing file in /block-store to use}
+        confirm: {type: boolean, description: go on after a 409 confirm_required}
+
+    BlockPatch:
+      type: object
+      additionalProperties: false
+      description: exactly one of size_bytes, auth, prio_path
+      properties:
+        size_bytes: {type: integer, format: int64, minimum: 1}
+        auth:
+          type: object
+          required: [enabled]
+          additionalProperties: false
+          properties:
+            enabled: {type: boolean}
+        prio_path: {type: string, description: IP address of a host of the block}
+        force:
+          type: boolean
+          description: size_bytes may shrink, prio_path skips hosts that do not answer
+
+    RebalanceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        dry_run: {type: boolean}
+
+    RebalancePlan:
+      type: object
+      required: [volume, dry_run, moves, prio_paths]
+      properties:
+        volume: {type: string}
+        dry_run: {type: boolean}
+        moves:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              name: {type: string}
+              from: {type: string}
+              to: {type: string}
+        prio_paths:
+          type: object
+          description: prio paths per host after the moves
+          additionalProperties: {type: integer}
+
+    MaintenanceRequest:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: {type: string, enum: [start, stop]}
+        force:
+          type: boolean
+          description: start skips the checks and the wait for idle I/O, stop the tcmu-runner check
+        rebalance: {type: boolean, description: stop only, spread the prio paths again}
+        confirm: {type: boolean, description: go on after a 409 confirm_required}
 
     OperationList:
       type: object

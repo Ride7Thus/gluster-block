@@ -81,6 +81,7 @@ storage creation and maintenance as simple as possible.
 %package api
 Summary:          HTTP API of gluster-block (gluster-block-apid)
 BuildRequires:    pkgconfig(libmicrohttpd)
+BuildRequires:    pkgconfig(gnutls)
 # apid speaks the local RPC of gluster-blockd of the same build
 Requires:         %{name} = %{version}-%{release}
 %{?systemd_requires}

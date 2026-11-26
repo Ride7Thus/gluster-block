@@ -8,7 +8,7 @@
  * 'version' reports it, gluster-block-apid refuses a daemon that is older
  * than what it was built for.
  */
-const GB_CLI_RPC_REV = 16;
+const GB_CLI_RPC_REV = 17;
 
 enum JsonResponseFormat {
   GB_JSON_NONE           = 0,
@@ -273,5 +273,7 @@ program GLUSTER_BLOCK_CLI {
     blockResponse BLOCK_HOST_MAINT_CLI(blockHostMaintCli) = 14;
     blockResponse BLOCK_VERSION_CLI(blockVersionCli) = 15;
     blockResponse BLOCK_VOLUMES_CLI(blockVolumesCli) = 16;
+    /* delete in background, like create: IN-PROGRESS and an operation id */
+    blockResponse BLOCK_DELETE_ASYNC_CLI(blockDeleteCli) = 17;
   } = 1;
 } = 212153113; /* B2 L12 O15 C3 K11 C3 */

@@ -82,7 +82,8 @@ typedef enum clioperations {
   REBALANCE_CLI = 13,
   HOST_MAINT_CLI = 14,
   VERSION_CLI = 15,
-  VOLUMES_CLI = 16
+  VOLUMES_CLI = 16,
+  DELETE_ASYNC_CLI = 17
 } clioperations;
 
 
@@ -251,6 +252,18 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
       goto out;
     }
     break;
+  case DELETE_ASYNC_CLI:
+    delete_obj = cobj;
+    if (block_delete_async_cli_1(delete_obj, &reply, clnt) != RPC_SUCCESS) {
+      LOG("cli", GB_LOG_ERROR, "%s block %s delete on volume %s failed",
+          clnt_sperror(clnt, "block_delete_async_cli_1"),
+          delete_obj->block_name, delete_obj->volume);
+      snprintf(errMsg, sizeof(errMsg), "%s",
+               clnt_sperror(clnt, "gluster-blockd does not delete in "
+                            "background (older than this cli?)"));
+      goto out;
+    }
+    break;
   case RELOAD_CLI:
     reload_obj = cobj;
     if (block_reload_cli_1(reload_obj, &reply, clnt) != RPC_SUCCESS) {
@@ -407,13 +420,15 @@ glusterBlockCliRPC_1(void *cobj, clioperations opt)
    */
   if (cliOptWait && !reply.exit && reply.xdata.xdata_len &&
       (opt == CREATE_CLI || opt == MODIFY_SIZE_CLI || opt == REBALANCE_CLI ||
-       opt == HOST_MAINT_CLI)) {
+       opt == HOST_MAINT_CLI || opt == DELETE_ASYNC_CLI)) {
     GB_STRCPYSTATIC(wait_obj.volume, opt == CREATE_CLI ?
                     ((blockCreateCli *)cobj)->volume :
                     opt == REBALANCE_CLI ?
                     ((blockRebalanceCli *)cobj)->volume :
                     opt == HOST_MAINT_CLI ?
                     ((blockHostMaintCli *)cobj)->volume :
+                    opt == DELETE_ASYNC_CLI ?
+                    ((blockDeleteCli *)cobj)->volume :
                     ((blockModifySizeCli *)cobj)->volume);
     snprintf(wait_obj.op_id, sizeof(wait_obj.op_id), "%.*s",
              (int)reply.xdata.xdata_len, reply.xdata.xdata_val);
@@ -491,9 +506,9 @@ glusterBlockHelp(void)
       "usage:\n"
       "  gluster-block [timeout <seconds>] [--wait] [--yes] <command> <volname[/blockname]> [<args>] [--json*]\n"
       "\n"
-      "  create and modify size return as soon as the request is accepted\n"
-      "  (RESULT: IN-PROGRESS) and finish in background, use 'status' to\n"
-      "  track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the\n"
+      "  create, delete and modify size return as soon as the request is\n"
+      "  accepted (RESULT: IN-PROGRESS) and finish in background, use 'status'\n"
+      "  to track them. With --wait (or GB_CLI_WAIT=yes) the cli waits for the\n"
       "  result instead.\n"
       "\n"
       "commands:\n"
@@ -578,8 +593,9 @@ glusterBlockHelp(void)
       "        it is the time in seconds that cli can wait for daemon to respond.\n"
       "        [default: timeout 300]\n"
       "  --wait\n"
-      "        wait until a background create or modify size finishes and print\n"
-      "        its result. [default: return RESULT: IN-PROGRESS at once]\n"
+      "        wait until a background create, delete, modify size, rebalance\n"
+      "        or maintenance finishes and print its result.\n"
+      "        [default: return RESULT: IN-PROGRESS at once]\n"
       "  --yes\n"
       "        do not ask for confirmation, e.g. 'prealloc no' on a dispersed\n"
       "        volume.\n"
@@ -1456,7 +1472,8 @@ glusterBlockDelete(int argcount, char **options, int json)
 
   getCommandString(&dobj.cmd, argcount, options);
 
-  ret = glusterBlockCliRPC_1(&dobj, DELETE_CLI);
+  /* in background like create, --wait waits for the result */
+  ret = glusterBlockCliRPC_1(&dobj, DELETE_ASYNC_CLI);
   if (ret) {
     LOG("cli", GB_LOG_ERROR, "failed deleting block %s on volume %s",
         dobj.block_name, dobj.volume);

@@ -56,7 +56,7 @@ class ApiReadTest(unittest.TestCase):
 
     def test_01_index_health(self):
         doc = self.get("/api/v1", schema="Index", fixture="index")
-        self.assertEqual(doc["api_version"], "1.0")
+        self.assertTrue(doc["api_version"].startswith("1."))
         self.get("/healthz", schema="Health", fixture="healthz")
         self.get("/api/v1/healthz", schema="Health")
 

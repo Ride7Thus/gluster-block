@@ -7,5 +7,5 @@ COPY extras/install_deps.sh /tmp/install_deps.sh
 RUN sh /tmp/install_deps.sh \
  && dnf install -y glusterfs-server glusterfs-fuse rpcbind attr procps-ng \
         iproute util-linux rsync python3 python3-jsonschema python3-pyyaml \
-        libmicrohttpd-devel gnutls-devel jq \
+        libmicrohttpd-devel gnutls-devel jq openssl \
  && dnf clean all

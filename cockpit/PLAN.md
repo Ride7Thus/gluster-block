@@ -3,7 +3,7 @@
 Ветка `cockpit-plugin` (от master 0.5.33). Модуль Cockpit для управления
 gluster-block, отдельный RPM-пакет `cockpit-gluster-block`.
 
-Статус: апрув получен 2026-11-26. Готово: этапы 0 и 1 (§8, отметки «готово»).
+Статус: апрув получен 2026-11-26. Готово: этапы 0–2 (§8, отметки «готово»).
 
 ## 0. Термины
 
@@ -360,9 +360,9 @@ Grafana сразу (В5): `extras/monitoring/gluster-block-dashboard.json`:
    `/block-meta`). Она нужна API, а CLI получит `gluster-block volumes`.
 3a. Асинхронный delete (В4): координатор проверяет синхронно, потом
    `gbAsyncRun()`, фазы и шаги по хостам в `status`. Межузловой
-   `BLOCK_DELETE` не меняется, новая capability не нужна. Чтобы не сломать
-   скрипты, CLI `delete` по умолчанию ждёт конец операции, как сейчас; новый
-   флаг `--no-wait` возвращает `IN-PROGRESS` + id. API всегда отвечает `202`.
+   `BLOCK_DELETE` не меняется, новая capability не нужна. Решение 2026-11-26:
+   CLI `delete` в фоне по умолчанию, как `create` (`IN-PROGRESS` + id),
+   `--wait` ждёт; отдельного `--no-wait` нет. API отвечает `202`.
    Демон 0.5.33 на координаторе в окне не участвует: apid всегда говорит с
    демоном той же версии (§7.5).
 4. `BLOCK_VERSION_CLI` (§7.2): версия, `cli_rpc_rev`, capabilities по хостам.
@@ -575,7 +575,14 @@ Grafana сразу (В5): `extras/monitoring/gluster-block-dashboard.json`:
      `functional.yml` (+ job `API contract`). GitLab без privileged — там его нет.
 2. `api: write operations, async delete, TLS` — мутирующие эндпоинты,
    202/операции, 409/confirm, идемпотентность, асинхронный delete в демоне
-   (+ `--no-wait`), TCP + TLS + mTLS/токены, аудит.
+   (CLI как у create: в фоне, `--wait` ждёт), TCP + TLS + mTLS/токены, аудит.
+   **Готово.** API 1.1:
+   - delete — новая CLI-процедура `BLOCK_DELETE_ASYNC_CLI` (17), `GB_CLI_RPC_REV` 17;
+   - уменьшение размера без `force` → 409 `force_required` (проверяет apid);
+   - rebalance, которому нечего двигать, отвечает 200 сразу;
+   - `Idempotency-Key` не сделан: create с теми же параметрами и delete
+     несуществующего и так идемпотентны;
+   - GitLab по-прежнему без функционального теста.
 3. `cockpit: plugin skeleton and read-only views` — каркас React/PF5, RPM
    `cockpit-gluster-block`, CI, матрица версий (§7.4), тома и блоки,
    переводы en/ru, dev-стенды уровней 1–3 с mock-apid и сценариями (§7.6),

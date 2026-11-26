@@ -26,7 +26,7 @@
 # include  <json-c/json.h>
 
 
-# define  API_VERSION          "1.0"
+# define  API_VERSION          "1.1"
 # define  API_PREFIX           "/api/v1"
 
 # define  API_SOCKET_DEF       "/run/gluster-block/api.sock"
@@ -45,6 +45,10 @@ typedef enum apiLogLevel {
 } apiLogLevel;
 
 
+# define  API_BODY_MAX         65536      /* bytes of a request body */
+# define  GB_API_TOKENS_DEF    "/etc/gluster-block/api-tokens"
+
+
 typedef struct apiConfig {
   char         socket[108];      /* unix socket of the API */
   char         daemonSocket[108];
@@ -52,9 +56,23 @@ typedef struct apiConfig {
   apiLogLevel  logLevel;
   unsigned int daemonTimeout;
   bool         logStderr;
+
+  /* TCP listener, TLS only, off when listen is empty */
+  char         listen[128];      /* host:port, [::]:port, *:port */
+  char         tlsCert[256];
+  char         tlsKey[256];
+  char         tlsCa[256];       /* client certificates (mutual TLS) */
+  char         tokensFile[256];
 } apiConfig;
 
 extern apiConfig apiConf;
+
+
+typedef enum apiRole {
+  API_ROLE_NONE = 0,
+  API_ROLE_READ,                 /* GET only */
+  API_ROLE_ADMIN,
+} apiRole;
 
 
 void apiLog(apiLogLevel level, const char *fmt, ...)
@@ -74,12 +92,15 @@ typedef struct apiRequest {
   size_t      nseg;
   void       *conn;                   /* struct MHD_Connection */
   const char *identity;               /* who asks, for the logs */
+  apiRole     role;
+  json_object *body;                  /* JSON request body, NULL if none */
 } apiRequest;
 
 typedef struct apiResponse {
   unsigned int status;
   json_object *body;                  /* owned, may be NULL (204) */
   const char  *allow;                 /* Allow header of a 405 */
+  char         location[512];         /* Location header of a 201/202 */
 } apiResponse;
 
 /* query argument, NULL when it is not given */
@@ -94,6 +115,24 @@ void apiRespond(apiResponse *resp, unsigned int status, json_object *body);
 void apiError(apiResponse *resp, unsigned int status, const char *code,
               int err, const char *fmt, ...)
   __attribute__((format(printf, 5, 6)));
+
+
+/* ------------------------------------------------------------------------
+ * clients of the TLS listener (auth.c)
+ * ------------------------------------------------------------------------ */
+
+/* (re)read the tokens file: -1 when lines were ignored */
+int apiAuthLoad(const char *path);
+
+/* certificate or bearer token of the connection: true with @who and @role */
+struct MHD_Connection;
+bool apiAuthenticate(struct MHD_Connection *conn, char *who, size_t len,
+                     apiRole *role);
+
+const char *apiRoleName(apiRole role);
+
+/* --new-token: print a new token and its line for the tokens file */
+int apiNewToken(const char *name, const char *role);
 
 
 /* ------------------------------------------------------------------------
@@ -117,6 +156,41 @@ int apiDaemonList(const char *volume, apiCall *c);
 int apiDaemonInfo(const char *volume, const char *block, apiCall *c);
 int apiDaemonHosts(const char *volume, const char *host, apiCall *c);
 int apiDaemonStatus(const char *volume, const char *opid, apiCall *c);
+
+typedef struct apiCreateArgs {
+  const char  *volume;
+  const char  *block;
+  const char  *hosts;            /* comma separated */
+  unsigned long long size;
+  unsigned int ha;
+  bool         auth;
+  bool         prealloc;
+  bool         zerofill;
+  bool         confirmed;        /* thin block on a dispersed volume */
+  unsigned int ringBuffer;
+  unsigned int blockSize;
+  unsigned int ioTimeout;
+  const char  *storage;
+} apiCreateArgs;
+
+int apiDaemonCreate(const apiCreateArgs *a, const char *cmd, apiCall *c);
+int apiDaemonDelete(const char *volume, const char *block, bool unlink,
+                    bool force, const char *cmd, apiCall *c);
+int apiDaemonResize(const char *volume, const char *block,
+                    unsigned long long size, bool force, const char *cmd,
+                    apiCall *c);
+int apiDaemonAuth(const char *volume, const char *block, bool enable,
+                  const char *cmd, apiCall *c);
+int apiDaemonPrio(const char *volume, const char *block, const char *host,
+                  bool force, const char *cmd, apiCall *c);
+int apiDaemonRebalance(const char *volume, bool dryRun, const char *cmd,
+                       apiCall *c);
+int apiDaemonMaint(const char *volume, const char *host, bool start,
+                   bool force, bool rebalance, bool confirmed,
+                   const char *cmd, apiCall *c);
+
+/* the volume list changed (a first block, the last one deleted) */
+void apiVolumesInvalidate(void);
 
 /*
  * Turn a failed call into an error response: no daemon (503), daemon too

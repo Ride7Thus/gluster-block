@@ -173,6 +173,17 @@ if test "x$enable_api" != "xno"; then
                   libmicrohttpd-dev (Debian, Ubuntu)])
                        fi])
 fi
+# the TLS listener: client certificates and token hashes
+if test "x$build_api" = "xyes"; then
+    PKG_CHECK_MODULES([GNUTLS], [gnutls >= 3.3], [],
+                      [if test "x$enable_api" = "xyes"; then
+                           AC_MSG_ERROR([gnutls is required for gluster-block-apid,
+                  install gnutls-devel (EL) or libgnutls28-dev (Debian, Ubuntu)])
+                       fi
+                       build_api=no])
+fi
+AC_SUBST(GNUTLS_CFLAGS)
+AC_SUBST(GNUTLS_LIBS)
 AM_CONDITIONAL([BUILD_API], [test "x$build_api" = "xyes"])
 AC_SUBST(MHD_CFLAGS)
 AC_SUBST(MHD_LIBS)
